@@ -27,6 +27,13 @@ Activation is optional; using the explicit interpreter also avoids PowerShell
 execution policy changes. PyAV includes FFmpeg libraries in its wheels; a separate
 FFmpeg executable is normally unnecessary.
 
+Faster-Whisper is pinned to `1.2.1`, with PyAV constrained to `av>=11,<18`.
+Newer PyAV releases can remove decoder API arguments used by Faster-Whisper
+(such as `metadata_errors`), causing transcription to fail. Install through this
+project rather than upgrading PyAV independently. To repair an existing `.venv`,
+rerun `.\.venv\Scripts\python.exe -m pip install -e ".[dev]"`; pip will apply the
+compatible constraint.
+
 ## First transcription
 
 Place a video at `input/video.webm`, then run:
@@ -108,7 +115,9 @@ python -m pytest -q
 ```
 
 CI runs these commands on Windows and Linux with Python 3.12 and 3.14. Unit tests
-mock Faster-Whisper and do not download models or require real WEBM files.
+mock model inference and do not download models or require real WEBM files.
+A decoder regression test generates a small WAV fixture locally and exercises
+real Faster-Whisper/PyAV decoding and resampling without network access.
 An actual media transcription is a separate manual integration check.
 
 `src/video_transcriber` separates settings, model/segment handling, exporters, and
