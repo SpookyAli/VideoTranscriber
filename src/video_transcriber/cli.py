@@ -6,16 +6,26 @@ from pathlib import Path
 
 from video_transcriber.config import COMPUTE_TYPES, MODELS, TranscriptionConfig
 from video_transcriber.exporters import Exporter, TxtExporter
+from video_transcriber.sources.youtube import YouTubeError, YouTubeSource
 from video_transcriber.transcriber import Transcriber
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Transcribe WEBM videos locally to UTF-8 TXT.")
+    parser = argparse.ArgumentParser(
+        description="Transcribe local WEBM files or YouTube audio to UTF-8 TXT."
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     command = commands.add_parser(
-        "transcribe", help="Transcribe a file or directory (nonrecursive)"
+        "transcribe", help="Transcribe a local file/directory (nonrecursive) or a YouTube video"
     )
-    command.add_argument("--input", required=True, type=Path)
+    source = command.add_mutually_exclusive_group(required=True)
+    source.add_argument("--input", type=Path)
+    source.add_argument("--url", help="Single YouTube video URL")
+    command.add_argument("--browser", choices=("firefox", "chrome", "edge"))
+    command.add_argument("--audio-language", help="YouTube audio track language, e.g. es")
+    command.add_argument("--prefer-original-audio", action="store_true")
+    command.add_argument("--keep-audio", action="store_true")
+    command.add_argument("--download-dir", type=Path, default=None, help="Default: input/")
     command.add_argument("--output", type=Path, default=Path("output"))
     command.add_argument("--language", help="Whisper language code, e.g. es; default: auto-detect")
     command.add_argument("--model", choices=MODELS, default="medium")
@@ -46,8 +56,84 @@ def discover_inputs(path: Path) -> list[Path]:
     return files
 
 
+def _config(args: argparse.Namespace) -> TranscriptionConfig:
+    return TranscriptionConfig(
+        model=args.model,
+        device=args.device,
+        compute_type=args.compute_type,
+        language=args.language,
+        model_dir=args.model_dir,
+        local_files_only=args.local_files_only,
+    )
+
+
+def transcribe_youtube(args: argparse.Namespace) -> int:
+    try:
+        source = YouTubeSource(
+            args.url,
+            browser=args.browser,
+            audio_language=args.audio_language,
+            prefer_original=args.prefer_original_audio,
+        )
+        args.output.mkdir(parents=True, exist_ok=True)
+    except (ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    try:
+        source.inspect()
+        target = args.output / (source.stem + ".txt")
+        if target.exists() and not args.overwrite:
+            print(f"Skipped: {target.name} (output exists)")
+            return 0
+        audio = source.download(args.download_dir or Path("input"))
+        result = Transcriber(_config(args)).transcribe(audio)
+        TxtExporter(timestamps=not args.no_timestamps).export(
+            result, target, overwrite=args.overwrite
+        )
+    except FileExistsError:
+        if not args.overwrite and target.is_file():
+            print(f"Skipped: {target.name} (output appeared during processing); audio retained")
+            return 0
+        print("Failed: output path exists; downloaded audio retained", file=sys.stderr)
+        return 1
+    except YouTubeError as exc:
+        print(f"Failed: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("Interrupted: any downloaded/partial audio has been retained", file=sys.stderr)
+        return 130
+    except Exception:
+        print(
+            "Failed: model loading, audio decoding/transcription, or TXT export failed; "
+            "downloaded audio retained. Check model availability, media, and output permissions.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"Transcribed: {audio.name} -> {target} ({result.language})")
+    if not args.keep_audio:
+        try:
+            source.cleanup()
+        except OSError:
+            print(
+                "Warning: TXT saved, but audio cleanup failed; remove audio manually",
+                file=sys.stderr,
+            )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.url:
+        return transcribe_youtube(args)
+    if (
+        args.browser
+        or args.audio_language is not None
+        or args.prefer_original_audio
+        or args.keep_audio
+        or args.download_dir is not None
+    ):
+        parser.error("YouTube options require --url")
     try:
         files = discover_inputs(args.input)
         # Case folding prevents collisions on Windows even when running on Linux.
@@ -75,16 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     succeeded = failed = 0
     if pending:
         try:
-            engine = Transcriber(
-                TranscriptionConfig(
-                    model=args.model,
-                    device=args.device,
-                    compute_type=args.compute_type,
-                    language=args.language,
-                    model_dir=args.model_dir,
-                    local_files_only=args.local_files_only,
-                )
-            )
+            engine = Transcriber(_config(args))
         except Exception as exc:
             print(f"Error loading model: {exc}", file=sys.stderr)
             failed = len(pending)
