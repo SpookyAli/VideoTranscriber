@@ -125,3 +125,123 @@ CLI orchestration. Exporters consume structured results through a small protocol
 so JSON/SRT can be added without changing the engine. `main.py` is the repository
 entry point. `input/`, `output/`, and `models/` hold ignored local artifacts; never
 commit recordings, generated text, credentials, or model weights.
+
+## YouTube sources (V1.1)
+
+YouTube support runs locally through pinned `yt-dlp==2026.10.26` and
+`yt-dlp-ejs==0.8.0`. Installing `.[dev]` installs both; Faster-Whisper remains
+1.2.1 and the PyAV constraint remains `av>=11,<18`. CPython 3.12 is the conservative
+baseline; the same commands support Python 3.14 when native wheels are available.
+No separate FFmpeg executable or audio transcoding is needed for WEBM/M4A audio.
+
+### Windows setup
+
+From the repository root in the PyCharm PowerShell terminal:
+
+```powershell
+py -3.14 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+winget install --id DenoLand.Deno --exact
+```
+
+Install Deno separately; this application never installs system software. The
+supported existing setup uses Deno 2.9.8. If already installed, keep that version;
+check `deno --version` and reopen PyCharm/its terminal after changing PATH. For a
+manual installation, use the official [Deno installation guide](https://docs.deno.com/runtime/getting_started/installation/).
+Deno must be on PATH in the process running Python. yt-dlp is explicitly configured
+to use Deno and its installed EJS challenge scripts. TLS verification stays enabled.
+On Linux use the same Python virtual environment workflow and install Deno separately.
+
+### First YouTube transcription
+
+For the first local validation, sign in to YouTube in **Firefox** with an account
+that can legitimately access the video, close Firefox if its cookie database is
+locked, and run:
+
+```powershell
+.\.venv\Scripts\python.exe main.py transcribe --url "https://youtu.be/Jqe34VMhFXI" --browser firefox --audio-language es --language es --model medium --model-dir models
+```
+
+Firefox is recommended on Windows. Chrome and Edge are also supported through
+`--browser chrome` and `--browser edge`, but OS encryption/profile locks can prevent
+cookie extraction. Authentication is optional for public videos:
+
+```powershell
+.\.venv\Scripts\python.exe main.py transcribe --url "https://www.youtube.com/watch?v=Jqe34VMhFXI" --audio-language es --language es --model medium --model-dir models
+```
+
+`--input` and `--url` are mutually exclusive. Browser, audio-track, and download
+options require `--url`. Watch, short-link, Shorts, embed, and live-video URLs are
+accepted; playlist-only URLs are rejected, and playlist parameters on a video URL
+are ignored. Only a single video's audio is downloaded.
+
+`--audio-language es` selects the **YouTube audio track**. `--language es` tells
+**Whisper which language to recognize**; neither option changes the other. Language
+matching normalizes case and underscores and accepts regional variants (`es`,
+`es-US`, `es-ES`). Matching original audio outranks dubbed audio, then non-DRC audio
+outranks DRC, with exact regional tags and bitrate used to rank remaining choices.
+A requested language that is unavailable produces an error listing available
+languages; the application never silently selects another language. Without an
+audio-language request, identifiable original audio is preferred; otherwise yt-dlp
+selects its normal best audio. `--prefer-original-audio` makes that preference
+explicit (it already applies by default). Selection never uses fixed format IDs.
+
+### Download lifecycle and output
+
+Downloads go into unique `input/youtube-*/` subdirectories by default. Override the
+parent using `--download-dir "D:\Audio"`. The filename uses a sanitized, length-limited
+title and YouTube ID, such as `Title [Jqe34VMhFXI].webm`; the actual container can
+also be M4A. No full video stream or unnecessary transcoding is used.
+
+TXT files use `output/<sanitized-title> [<id>].txt` and preserve UTF-8, timestamps,
+and atomic publication. `--output` changes the output directory. An existing TXT
+is skipped after metadata lookup and before audio download, unless `--overwrite`
+is supplied. `--overwrite` applies to the transcript; each download has a new
+private directory and never overwrites an existing recording.
+
+After successful TXT export the operation's download directory is removed. Keep
+its audio with:
+
+```powershell
+.\.venv\Scripts\python.exe main.py transcribe --url "https://youtu.be/Jqe34VMhFXI" --browser firefox --audio-language es --language es --keep-audio
+```
+
+Model, decoder, and export failures preserve downloaded audio; interrupted downloads
+may leave `.part` files in that operation's directory. Cleanup failure emits a
+warning and leaves the completed TXT intact. Local user inputs and previous
+operations' downloads are never removed. The local `--input` workflow still scans
+WEBM files only; retained M4A files are supported by the engine's PyAV decoder but
+are not accepted by the local-file CLI in this release.
+
+### Troubleshooting and security
+
+- **Missing Deno / JavaScript challenge:** verify `deno --version`, PATH, and the
+  pinned yt-dlp/EJS packages with `.\.venv\Scripts\python.exe -m pip check`.
+  Reopen the terminal after installation. YouTube changes can require a future
+  coordinated dependency update; do not disable TLS or bypass challenges/access rules.
+- **Authentication / membership:** sign in locally with an entitled account and
+  choose the correct browser. Close the browser if its profile is locked. This
+  version uses the browser's default profile and does not automatically log in.
+- **Unavailable language / no audio formats:** check the displayed language list
+  or the video's availability. There is no fallback to another requested language,
+  video streams, DRM content, or unauthorized access methods.
+- **Network / download failure:** check connectivity, video availability, access,
+  and permission to download. Unknown errors are not labeled authentication errors.
+  Upstream messages are suppressed to avoid leaking cookies, headers, and signed URLs.
+- **Transcription / TXT failure:** check the model cache (especially with
+  `--local-files-only`), audio validity, disk space, and output permissions. Audio
+  remains in the operation's download directory. First model use requires a download;
+  cached models support offline inference.
+
+Browser cookies are used only by local yt-dlp and the requested service. They are
+never intentionally exported, written to a persistent cookie file, printed, or sent
+to telemetry. Do not commit browser profiles, cookies, media, or generated output.
+Access permission and downloading permission are separate: account access does not
+itself grant permission to save media. Use this feature only where both permit it.
+No authentication bypass or DRM circumvention is implemented.
+
+All tests run offline with mocked yt-dlp/browser authentication. They include a
+real yt-dlp API-contract test with a local fake download and the existing real
+Faster-Whisper/PyAV decoding regression. CI does not need Deno, browser profiles,
+YouTube access, model weights, or credentials. Live YouTube authentication/challenge
+solving and transcription remain separate manual checks on the user's machine.
