@@ -124,12 +124,15 @@ def test_empty_srt_and_json(tmp_path):
     assert json.loads((tmp_path / "empty.json").read_text())["segments"] == []
 
 
-@pytest.mark.parametrize("segment", [
-    Segment(-1, 2, "x"),
-    Segment(4, 3, "x"),
-    Segment(float("nan"), 1, "x"),
-    Segment(0, float("inf"), "x"),
-])
+@pytest.mark.parametrize(
+    "segment",
+    [
+        Segment(-1, 2, "x"),
+        Segment(4, 3, "x"),
+        Segment(float("nan"), 1, "x"),
+        Segment(0, float("inf"), "x"),
+    ],
+)
 @pytest.mark.parametrize("exporter", [SrtExporter(), JsonExporter()])
 def test_reject_invalid_segment_timing_without_creating_output(tmp_path, segment, exporter):
     target = tmp_path / ("bad" + exporter.suffix)
@@ -162,9 +165,7 @@ def test_multiformat_atomic_overwrite_and_cleanup(tmp_path, monkeypatch, exporte
 
 
 def test_export_selection():
-    assert [exporter.suffix for exporter in exporters_for("all")] == [
-        ".txt", ".srt", ".json"
-    ]
+    assert [exporter.suffix for exporter in exporters_for("all")] == [".txt", ".srt", ".json"]
     assert [exporter.suffix for exporter in exporters_for("srt")] == [".srt"]
     with pytest.raises(ValueError):
         exporters_for("pdf")
