@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from video_transcriber.config import COMPUTE_TYPES, MODELS, TranscriptionConfig
-from video_transcriber.exporters import FORMATS, Exporter, TxtExporter, exporters_for
+from video_transcriber.exporters import FORMATS, Exporter, TxtExporter as TxtExporter, exporters_for
 from video_transcriber.progress import ProgressReporter
 from video_transcriber.sources.youtube import YouTubeError, YouTubeSource, select_audio
 from video_transcriber.transcriber import Transcriber
