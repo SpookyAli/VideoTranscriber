@@ -158,7 +158,7 @@ def test_download_configuration_and_actual_path(tmp_path, downloader, browser, m
     [
         ("Sign in with cookies SECRET", "access/authentication failed"),
         ("Video unavailable SECRET", "Video unavailable"),
-        ("Signature JavaScript challenge SECRET", "Deno and yt-dlp-ejs"),
+        ("Signature JavaScript challenge SECRET", "Deno was not found on PATH"),
         ("Connection reset SECRET", "metadata extraction failed"),
     ],
 )
@@ -482,7 +482,7 @@ def test_debug_http_403_safe(youtube_cli, downloader, capsys):
 
 def test_debug_rejects_malicious_format_metadata(youtube_cli, downloader, capsys):
     downloader[1]["formats"] = [
-        track(identifier="token=SECRET", language="es", note="Spanish original")
+        track(identifier="a", language="es-US;SECRET", note="Spanish original")
     ]
     assert main(youtube_cli[0] + ["--debug"]) == 0
     logs = capsys.readouterr()
