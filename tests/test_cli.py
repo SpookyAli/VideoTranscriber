@@ -1,3 +1,4 @@
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -141,3 +142,87 @@ def test_local_default_no_progress(tmp_path, engine, capsys):
     output = capsys.readouterr().out
     assert "[PROGRESS]" not in output
     assert "[PERF]" not in output
+
+
+def test_local_all_formats_one_transcription_and_skip(tmp_path, engine, capsys):
+    media = tmp_path / "demo.webm"
+    media.touch()
+    out = tmp_path / "out"
+    args = ["transcribe", "--input", str(media), "--output", str(out), "--format", "all"]
+    assert main(args) == 0
+    engine[1].transcribe.assert_called_once_with(media)
+    assert {p.suffix for p in out.iterdir()} == {".txt", ".srt", ".json"}
+    assert (out / "demo.txt").read_text() == "[00:00:01 - 00:00:02] Hello\n\n"
+    assert "00:00:01,000 --> 00:00:02,000" in (out / "demo.srt").read_text()
+    assert json.loads((out / "demo.json").read_text())["segments"][0]["text"] == "Hello"
+    engine[0].reset_mock()
+    assert main(args) == 0
+    engine[0].assert_not_called()
+    assert "all requested outputs exist" in capsys.readouterr().out
+
+
+def test_local_partial_missing_format_retains_existing(tmp_path, engine):
+    media = tmp_path / "demo.webm"
+    media.touch()
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = out / "demo.txt"
+    existing.write_text("original")
+    assert main([
+        "transcribe", "--input", str(media), "--output", str(out), "--format", "all"
+    ]) == 0
+    assert existing.read_text() == "original"
+    assert (out / "demo.srt").exists()
+    assert (out / "demo.json").exists()
+    assert engine[1].transcribe.call_count == 1
+
+
+def test_local_srt_only_and_json_only(tmp_path, engine):
+    media = tmp_path / "demo.webm"
+    media.touch()
+    out = tmp_path / "out"
+    for fmt in ("srt", "json"):
+        assert main([
+            "transcribe", "--input", str(media), "--output", str(out),
+            "--format", fmt,
+        ]) == 0
+    assert not (out / "demo.txt").exists()
+    assert (out / "demo.srt").exists()
+    assert (out / "demo.json").exists()
+
+
+def test_local_no_timestamps_does_not_change_srt(tmp_path, engine):
+    media = tmp_path / "demo.webm"
+    media.touch()
+    out = tmp_path / "out"
+    assert main([
+        "transcribe", "--input", str(media), "--output", str(out),
+        "--format", "all", "--no-timestamps",
+    ]) == 0
+    assert (out / "demo.txt").read_text() == "Hello\n\n"
+    assert "-->" in (out / "demo.srt").read_text()
+
+
+def test_local_formats_are_race_safe(tmp_path, engine, monkeypatch):
+    media = tmp_path / "demo.webm"
+    media.touch()
+    out = tmp_path / "out"
+    out.mkdir()
+    target = out / "demo.json"
+    target.write_text("other writer")
+
+    from video_transcriber.exporters import JsonExporter
+
+    original = JsonExporter.export
+
+    def raced(self, result, path, overwrite=False):
+        if not path.exists():
+            path.write_text("other writer")
+        return original(self, result, path, overwrite=overwrite)
+
+    monkeypatch.setattr("video_transcriber.exporters.JsonExporter.export", raced)
+    assert main([
+        "transcribe", "--input", str(media), "--output", str(out), "--format", "all"
+    ]) == 0
+    assert target.read_text() == "other writer"
+    assert (out / "demo.srt").exists()
