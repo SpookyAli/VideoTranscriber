@@ -147,7 +147,10 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
         if not args.overwrite and target is not None and target.is_file():
             print(f"Skipped: {target.name} (output appeared during processing); audio retained")
             return 0
-        print("Failed [EXPORT_FAILED]: output path exists; downloaded audio retained", file=sys.stderr)
+        print(
+            "Failed [EXPORT_FAILED]: output path exists; downloaded audio retained",
+            file=sys.stderr,
+        )
         return 1
     except YouTubeError as exc:
         debug(f"{exc.stage}: FAILED")
