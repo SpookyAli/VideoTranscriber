@@ -1,5 +1,6 @@
 """Offline source and lifecycle tests; no browser profile or network is used."""
 
+import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -558,3 +559,40 @@ def test_youtube_progress_hooks_and_cli(tmp_path, downloader, youtube_cli, capsy
     assert len(downloader[0][-1].options["progress_hooks"]) == 1
     engine.transcribe.assert_called_once()
     assert callable(engine.transcribe.call_args.kwargs["progress"])
+
+
+def test_youtube_all_exports_one_download_and_transcription(youtube_cli, downloader):
+    args, downloads, output, factory, engine = youtube_cli
+    assert main(args + ["--format", "all"]) == 0
+    assert len(list(output.glob("*.txt"))) == 1
+    assert len(list(output.glob("*.srt"))) == 1
+    assert len(list(output.glob("*.json"))) == 1
+    assert json.loads(next(output.glob("*.json")).read_text())["language"] == "es"
+    assert "00:00:01,000 --> 00:00:02,000" in next(output.glob("*.srt")).read_text()
+    assert len(downloader[0]) == 2
+    engine.transcribe.assert_called_once()
+    assert not list(downloads.rglob("*.m4a"))
+
+
+def test_youtube_only_missing_formats_are_exported(youtube_cli):
+    args, downloads, output, factory, engine = youtube_cli
+    output.mkdir()
+    original = output / f"A title_ _ safe % name [{VIDEO}].txt"
+    # Determine the canonical sanitized stem via the same metadata fixture.
+    source = YouTubeSource(URL, audio_language="es")
+    source.inspect()
+    original = output / (source.stem + ".txt")
+    original.write_text("preexisting", encoding="utf-8")
+    assert main(args + ["--format", "all"]) == 0
+    assert original.read_text() == "preexisting"
+    assert len(list(output.glob("*.srt"))) == 1
+    assert len(list(output.glob("*.json"))) == 1
+
+
+def test_youtube_json_export_failure_keeps_audio(youtube_cli, monkeypatch):
+    monkeypatch.setattr(
+        "video_transcriber.cli.exporters_for",
+        lambda *args, **kwargs: (Mock(suffix=".json", export=Mock(side_effect=OSError("disk"))),),
+    )
+    assert main(youtube_cli[0] + ["--format", "json"]) == 1
+    assert list(youtube_cli[1].rglob("*.m4a"))
