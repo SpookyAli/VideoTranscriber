@@ -37,7 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--no-timestamps", action="store_true")
     command.add_argument("--overwrite", action="store_true")
     command.add_argument("--debug", action="store_true", help="Show safe stage-based diagnostics")
-    command.add_argument("--progress", action="store_true", help="Show stage, download and transcription progress")
+    command.add_argument(
+        "--progress", action="store_true", help="Show stage, download and transcription progress"
+    )
     return parser
 
 
