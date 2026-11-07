@@ -159,7 +159,7 @@ def test_download_configuration_and_actual_path(tmp_path, downloader, browser, m
         ("Sign in with cookies SECRET", "access/authentication failed"),
         ("Video unavailable SECRET", "Video unavailable"),
         ("Signature JavaScript challenge SECRET", "Deno and yt-dlp-ejs"),
-        ("Connection reset SECRET", "check connectivity"),
+        ("Connection reset SECRET", "metadata extraction failed"),
     ],
 )
 def test_safe_errors(downloader, message, expected, monkeypatch):
@@ -169,7 +169,8 @@ def test_safe_errors(downloader, message, expected, monkeypatch):
         YouTubeSource(URL).inspect()
     assert expected in str(error.value)
     assert "SECRET" not in str(error.value)
-    assert "not found on PATH" in str(error.value)
+    assert error.value.stage == "METADATA_EXTRACTION"
+    assert error.value.code in {"AUTHENTICATION_FAILED", "VIDEO_UNAVAILABLE", "JS_RUNTIME_UNAVAILABLE", "METADATA_EXTRACTION_FAILED"}
 
 
 def test_download_failure_preserves_partial(tmp_path, downloader):
@@ -181,8 +182,10 @@ def test_download_failure_preserves_partial(tmp_path, downloader):
         raise RuntimeError("network interrupted SECRET")
 
     downloader[2].process_ie_result = fail
-    with pytest.raises(YouTubeError, match="metadata/download failed"):
+    with pytest.raises(YouTubeError, match="media download failed") as failure:
         source.download(tmp_path)
+    assert failure.value.stage == "DOWNLOAD"
+    assert failure.value.code == "DOWNLOAD_FAILED"
     assert (source.directory / "audio.part").read_bytes() == b"partial"
 
 
@@ -402,3 +405,131 @@ def test_processed_metadata_does_not_download_video(tmp_path, monkeypatch):
     source.inspect()
     assert source.download(tmp_path).is_file()
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [(403, "DOWNLOAD_HTTP_403"), (404, "DOWNLOAD_HTTP_404"),
+     (429, "DOWNLOAD_HTTP_429"), (500, "DOWNLOAD_HTTP_5XX"),
+     (503, "DOWNLOAD_HTTP_5XX")],
+)
+def test_download_http_error_stage_and_privacy(tmp_path, downloader, status, code, capsys):
+    source = YouTubeSource(URL, audio_language="es")
+    source.inspect()
+    downloader[2].process_ie_result = Mock(
+        side_effect=RuntimeError(
+            f"ERROR: unable to download video data: HTTP Error {status}: Forbidden "
+            "https://example.invalid/videoplayback?token=SECRET"
+        )
+    )
+    with pytest.raises(YouTubeError) as failure:
+        source.download(tmp_path)
+    assert failure.value.code == code
+    assert failure.value.stage == "DOWNLOAD"
+    assert failure.value.http_status == status
+    assert "SECRET" not in str(failure.value)
+    assert "example.invalid" not in str(failure.value)
+    assert "SECRET" not in capsys.readouterr().err
+
+
+def test_metadata_http_error_not_labeled_download(downloader):
+    downloader[2].extract_info = Mock(side_effect=RuntimeError("HTTP Error 403: Forbidden"))
+    with pytest.raises(YouTubeError) as failure:
+        YouTubeSource(URL).inspect()
+    assert failure.value.code == "METADATA_EXTRACTION_FAILED"
+    assert failure.value.stage == "METADATA_EXTRACTION"
+    assert failure.value.http_status == 403
+
+
+def test_audio_errors_have_structured_stage():
+    with pytest.raises(YouTubeError) as missing:
+        select_audio([])
+    assert (missing.value.code, missing.value.stage) == (
+        "AUDIO_FORMAT_NOT_FOUND", "AUDIO_SELECTION"
+    )
+    with pytest.raises(YouTubeError) as language:
+        select_audio([track(language="en")], "es")
+    assert (language.value.code, language.value.stage) == (
+        "AUDIO_LANGUAGE_UNAVAILABLE", "AUDIO_SELECTION"
+    )
+
+
+def test_debug_stage_reporting_safe(youtube_cli, capsys):
+    assert main(youtube_cli[0] + ["--debug"]) == 0
+    logs = capsys.readouterr()
+    assert "[DEBUG] Metadata extraction: OK" in logs.out
+    assert "[DEBUG] Audio selection: OK" in logs.out
+    assert "[DEBUG] Download: OK" in logs.out
+    assert "Transcription: OK" in logs.out
+    assert "TXT export: OK" in logs.out
+
+
+def test_debug_http_403_safe(youtube_cli, downloader, capsys):
+    downloader[2].process_ie_result = Mock(
+        side_effect=RuntimeError(
+            "unable to download video data: HTTP Error 403: Forbidden "
+            "https://example.invalid/?Authorization=SECRET"
+        )
+    )
+    assert main(youtube_cli[0] + ["--debug"]) == 1
+    logs = capsys.readouterr()
+    assert "[DEBUG] DOWNLOAD: FAILED" in logs.out
+    assert "[DEBUG] HTTP status: 403" in logs.out
+    assert "Failed [DOWNLOAD_HTTP_403] (DOWNLOAD)" in logs.err
+    assert "SECRET" not in logs.out + logs.err
+    assert "Authorization" not in logs.out + logs.err
+
+
+def test_debug_rejects_malicious_format_metadata(youtube_cli, downloader, capsys):
+    downloader[1]["formats"] = [
+        track(identifier="token=SECRET", language="es", note="Spanish original")
+    ]
+    assert main(youtube_cli[0] + ["--debug"]) == 0
+    logs = capsys.readouterr()
+    assert "token=SECRET" not in logs.out + logs.err
+
+
+def test_missing_deno_not_reported_for_unrelated_http_error(tmp_path, downloader, monkeypatch):
+    monkeypatch.setattr("video_transcriber.sources.youtube.shutil.which", lambda _: None)
+    source = YouTubeSource(URL)
+    source.inspect()
+    downloader[2].process_ie_result = Mock(
+        side_effect=RuntimeError("HTTP Error 403: Forbidden")
+    )
+    with pytest.raises(YouTubeError) as failure:
+        source.download(tmp_path)
+    assert failure.value.code == "DOWNLOAD_HTTP_403"
+    assert "Deno" not in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [("JavaScript challenge failed", "JS_CHALLENGE_FAILED"),
+     ("Sign in with cookies", "AUTHENTICATION_FAILED"),
+     ("Video unavailable", "VIDEO_UNAVAILABLE")],
+)
+def test_structured_extractor_errors(downloader, monkeypatch, message, expected):
+    monkeypatch.setattr("video_transcriber.sources.youtube.shutil.which", lambda _: "deno")
+    downloader[2].extract_info = Mock(side_effect=RuntimeError(message))
+    with pytest.raises(YouTubeError) as failure:
+        YouTubeSource(URL).inspect()
+    assert failure.value.code == expected
+    assert failure.value.stage == "METADATA_EXTRACTION"
+
+
+def test_youtube_transcription_and_export_failure_codes(youtube_cli, monkeypatch, capsys):
+    youtube_cli[4].transcribe.side_effect = RuntimeError("SECRET private model error")
+    assert main(youtube_cli[0] + ["--debug"]) == 1
+    stderr = capsys.readouterr().err
+    assert "TRANSCRIPTION_FAILED" in stderr
+    assert "SECRET" not in stderr
+
+    youtube_cli[4].transcribe.side_effect = None
+    monkeypatch.setattr(
+        "video_transcriber.cli.TxtExporter.export",
+        Mock(side_effect=RuntimeError("SECRET disk error")),
+    )
+    assert main(youtube_cli[0] + ["--debug"]) == 1
+    stderr = capsys.readouterr().err
+    assert "EXPORT_FAILED" in stderr
+    assert "SECRET" not in stderr
