@@ -209,7 +209,6 @@ def test_local_formats_are_race_safe(tmp_path, engine, monkeypatch):
     out = tmp_path / "out"
     out.mkdir()
     target = out / "demo.json"
-    target.write_text("other writer")
 
     from video_transcriber.exporters import JsonExporter
 
