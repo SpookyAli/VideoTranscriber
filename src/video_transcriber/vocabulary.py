@@ -33,7 +33,11 @@ def vocabulary_file(path: Path) -> tuple[str, ...]:
         raise ValueError("Cannot read vocabulary file; check the path and permissions") from None
     except UnicodeError:
         raise ValueError("Vocabulary file must be UTF-8 text") from None
-    terms = [line.strip() for line in raw.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    terms = [
+        line.strip()
+        for line in raw.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
     if len(terms) > MAX_TERMS:
         raise ValueError("Vocabulary file contains too many terms (limit: 64)")
     if any(len(term) > MAX_TERM_CHARS or any(ord(ch) < 32 for ch in term) for term in terms):
