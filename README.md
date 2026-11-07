@@ -306,3 +306,41 @@ emitted by the progress reporter.
 
 This version does not change authorization, downloading or access restrictions;
 HTTP 403 download failures continue to be reported by V1.1.1 diagnostics.
+
+## Structured multi-format export (V1.3)
+
+The default remains UTF-8 TXT. Choose exactly one output format with `--format`:
+
+```powershell
+python main.py transcribe --input "input/PLAYBOOK Semana 8.webm" --language es --model medium --model-dir models --format srt
+python main.py transcribe --input "input/PLAYBOOK Semana 8.webm" --language es --model medium --model-dir models --format json
+python main.py transcribe --input "input/PLAYBOOK Semana 8.webm" --language es --model medium --model-dir models --format all --progress
+```
+
+`--format all` produces `<stem>.txt`, `<stem>.srt` and `<stem>.json` from
+**one transcription**, using the same timestamps and recognized language.
+The same selection works for YouTube sources after a permitted audio download.
+`--no-timestamps` affects only TXT; SRT always includes precise millisecond
+timing. Text output remains byte-for-byte compatible with earlier versions.
+
+SRT contains sequential cues beginning at 1, with
+`HH:MM:SS,mmm --> HH:MM:SS,mmm` timestamps. Empty/whitespace-only
+segments do not produce cues. Millisecond timestamps are rounded and large
+hours do not wrap.
+
+JSON is UTF-8 with `schema_version: 1`, `language`,
+`language_probability`, and `segments`, where every segment carries
+`start`, `end` (floating-point seconds) and `text`. JSON preserves
+the original segment timings rather than rounding them for subtitles.
+JSON/SRT reject invalid or nonfinite segment timestamps. They contain
+transcript text, which may be sensitive: treat output files as private.
+
+Outputs are written to temporary files in the target directory and
+published atomically. Without `--overwrite`, existing requested formats
+are preserved and only missing requested formats are generated. If every
+requested format exists, transcription is skipped. With `--overwrite`,
+all requested formats are replaced. For `--format all`, each individual
+file is atomic, but publication across all three files is **not** a
+transaction: if one export fails, previously published formats remain.
+YouTube audio is retained when any output fails. No new dependencies
+or download mechanisms are introduced.
