@@ -63,19 +63,19 @@ def test_config_validation(options):
 def test_lazy_transcription_reports_segment_progress(monkeypatch):
     model = Mock()
     model.transcribe.return_value = (
-        iter([
-            SimpleNamespace(start=0.0, end=2.0, text=" Hola "),
-            SimpleNamespace(start=2.0, end=5.0, text=" Mundo "),
-        ]),
+        iter(
+            [
+                SimpleNamespace(start=0.0, end=2.0, text=" Hola "),
+                SimpleNamespace(start=2.0, end=5.0, text=" Mundo "),
+            ]
+        ),
         SimpleNamespace(language="es", language_probability=0.9, duration=10.0),
     )
     monkeypatch.setitem(
         sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=Mock(return_value=model))
     )
     progress = Mock()
-    result = Transcriber(TranscriptionConfig()).transcribe(
-        Path("video.webm"), progress=progress
-    )
+    result = Transcriber(TranscriptionConfig()).transcribe(Path("video.webm"), progress=progress)
     assert [segment.text for segment in result.segments] == ["Hola", "Mundo"]
     assert progress.call_args_list == [((2.0, 10.0),), ((5.0, 10.0),)]
 
