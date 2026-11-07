@@ -144,6 +144,7 @@ def test_local_default_no_progress(tmp_path, engine, capsys):
     assert "[PERF]" not in output
 
 
+
 def test_local_all_formats_one_transcription_and_skip(tmp_path, engine, capsys):
     media = tmp_path / "demo.webm"
     media.touch()
@@ -168,9 +169,8 @@ def test_local_partial_missing_format_retains_existing(tmp_path, engine):
     out.mkdir()
     existing = out / "demo.txt"
     existing.write_text("original")
-    assert main([
-        "transcribe", "--input", str(media), "--output", str(out), "--format", "all"
-    ]) == 0
+    args = ["transcribe", "--input", str(media), "--output", str(out), "--format", "all"]
+    assert main(args) == 0
     assert existing.read_text() == "original"
     assert (out / "demo.srt").exists()
     assert (out / "demo.json").exists()
@@ -182,10 +182,8 @@ def test_local_srt_only_and_json_only(tmp_path, engine):
     media.touch()
     out = tmp_path / "out"
     for fmt in ("srt", "json"):
-        assert main([
-            "transcribe", "--input", str(media), "--output", str(out),
-            "--format", fmt,
-        ]) == 0
+        args = ["transcribe", "--input", str(media), "--output", str(out), "--format", fmt]
+        assert main(args) == 0
     assert not (out / "demo.txt").exists()
     assert (out / "demo.srt").exists()
     assert (out / "demo.json").exists()
@@ -195,10 +193,11 @@ def test_local_no_timestamps_does_not_change_srt(tmp_path, engine):
     media = tmp_path / "demo.webm"
     media.touch()
     out = tmp_path / "out"
-    assert main([
+    args = [
         "transcribe", "--input", str(media), "--output", str(out),
         "--format", "all", "--no-timestamps",
-    ]) == 0
+    ]
+    assert main(args) == 0
     assert (out / "demo.txt").read_text() == "Hello\n\n"
     assert "-->" in (out / "demo.srt").read_text()
 
@@ -220,8 +219,7 @@ def test_local_formats_are_race_safe(tmp_path, engine, monkeypatch):
         return original(self, result, path, overwrite=overwrite)
 
     monkeypatch.setattr("video_transcriber.exporters.JsonExporter.export", raced)
-    assert main([
-        "transcribe", "--input", str(media), "--output", str(out), "--format", "all"
-    ]) == 0
+    args = ["transcribe", "--input", str(media), "--output", str(out), "--format", "all"]
+    assert main(args) == 0
     assert target.read_text() == "other writer"
     assert (out / "demo.srt").exists()
