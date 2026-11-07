@@ -1,6 +1,7 @@
 """Local yt-dlp integration; never expose extractor messages or browser secrets."""
 
 import re
+from collections.abc import Callable
 import shutil
 import tempfile
 from pathlib import Path
@@ -262,7 +263,9 @@ class YouTubeSource:
         except Exception as exc:
             raise _failure(exc, self.deno, "METADATA_EXTRACTION") from None
 
-    def download(self, directory: Path) -> Path:
+    def download(
+        self, directory: Path, *, progress_hook: Callable[[dict], None] | None = None
+    ) -> Path:
         from yt_dlp import YoutubeDL
 
         if not self.info:
@@ -278,6 +281,8 @@ class YouTubeSource:
                 self.info.get("formats", []), self.audio_language, self.prefer_original
             )
             options = dict(self.options)
+            if progress_hook is not None:
+                options["progress_hooks"] = [progress_hook]
             options["format"] = (lambda ctx: iter([selected])) if selected else "bestaudio"
             # Escape metadata percent signs in yt-dlp's output template.
             options["outtmpl"] = str(self.directory / self.stem).replace("%", "%%") + ".%(ext)s"
