@@ -248,7 +248,9 @@ def main(argv: list[str] | None = None) -> int:
     succeeded = failed = 0
     if pending:
         try:
+            reporter.start("model")
             engine = Transcriber(_config(args))
+            reporter.finish("model")
         except Exception as exc:
             print(f"Error loading model: {exc}", file=sys.stderr)
             failed = len(pending)
