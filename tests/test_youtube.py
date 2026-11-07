@@ -544,3 +544,17 @@ def test_youtube_transcription_and_export_failure_codes(youtube_cli, monkeypatch
     stderr = capsys.readouterr().err
     assert "EXPORT_FAILED" in stderr
     assert "SECRET" not in stderr
+
+
+def test_youtube_progress_hooks_and_cli(tmp_path, downloader, youtube_cli, capsys):
+    args, _, _, factory, engine = youtube_cli
+    assert main(args + ["--progress"]) == 0
+    output = capsys.readouterr().out
+    assert "[PROGRESS] metadata: done" in output
+    assert "[PROGRESS] download: done" in output
+    assert "[PROGRESS] transcription: done" in output
+    assert "[PERF] Total elapsed:" in output
+    # The progress hook must be passed into yt-dlp without changing normal paths.
+    assert len(downloader[0][-1].options["progress_hooks"]) == 1
+    engine.transcribe.assert_called_once()
+    assert callable(engine.transcribe.call_args.kwargs["progress"])

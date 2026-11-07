@@ -277,3 +277,32 @@ fails, check URL, connection, service availability and authentication. If Deno
 challenge solving fails, inspect its installation and the yt-dlp/EJS dependency
 versions. Audio-track mismatch is reported without silently choosing a different
 language. Existing downloaded audio is retained after transcription/export failure.
+
+## Progress and performance monitoring (V1.2)
+
+Add `--progress` to `transcribe` for opt-in stage timing, bounded percentage
+updates when duration/byte totals are available, and an end-of-run timing summary:
+
+```powershell
+python main.py transcribe --input input/video.webm --language es --model medium --model-dir models --progress
+python main.py transcribe --url "https://www.youtube.com/watch?v=VIDEO_ID" --browser firefox --audio-language es --language es --model medium --model-dir models --progress
+```
+
+The default CLI remains concise; `--debug` is a separate diagnostic option and
+may be combined with `--progress`. For local batches the model is loaded once
+and timing covers each transcription/export stage. For YouTube, progress starts
+at metadata extraction and reports media download progress when yt-dlp supplies
+downloaded byte totals. Unknown totals never produce fabricated percentages.
+
+Transcription progress is based on the end timestamps of *completed* Whisper
+segments divided by Faster-Whisper's reported source duration. If the duration
+is unknown or no segment has completed, only stage timing is reported. VAD,
+silence, and variable inference speed mean these percentages are not wall-clock
+completion predictions. Stage timing uses a monotonic clock. The transcription
+real-time factor (RTF) is measured transcription wall time divided by audio
+duration; lower RTF means faster than real time. All counters and updates are
+bounded, and no source filenames, URLs, headers, cookies or signed URLs are
+emitted by the progress reporter.
+
+This version does not change authorization, downloading or access restrictions;
+HTTP 403 download failures continue to be reported by V1.1.1 diagnostics.

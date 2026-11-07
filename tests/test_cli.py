@@ -121,3 +121,23 @@ def test_export_failure(tmp_path, engine, monkeypatch):
         "video_transcriber.cli.TxtExporter.export", Mock(side_effect=OSError("disk"))
     )
     assert main(["transcribe", "--input", str(source), "--output", str(tmp_path / "out")]) == 1
+
+
+def test_local_progress_opt_in(tmp_path, engine, capsys):
+    media = tmp_path / "clip.webm"
+    media.touch()
+    out = tmp_path / "out"
+    assert main(["transcribe", "--input", str(media), "--output", str(out), "--progress"]) == 0
+    output = capsys.readouterr().out
+    assert "[PROGRESS] model: starting" in output
+    assert "[PROGRESS] transcription: done" in output
+    assert "[PERF] Total elapsed:" in output
+
+
+def test_local_default_no_progress(tmp_path, engine, capsys):
+    media = tmp_path / "clip.webm"
+    media.touch()
+    assert main(["transcribe", "--input", str(media), "--output", str(tmp_path / "out")]) == 0
+    output = capsys.readouterr().out
+    assert "[PROGRESS]" not in output
+    assert "[PERF]" not in output
