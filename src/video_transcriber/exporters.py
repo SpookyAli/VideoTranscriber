@@ -128,8 +128,7 @@ class JsonExporter:
             "language": result.language,
             "language_probability": result.language_probability,
             "segments": [
-                {"start": seg.start, "end": seg.end, "text": seg.text}
-                for seg in result.segments
+                {"start": seg.start, "end": seg.end, "text": seg.text} for seg in result.segments
             ],
         }
 
