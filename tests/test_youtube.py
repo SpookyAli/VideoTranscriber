@@ -414,9 +414,13 @@ def test_processed_metadata_does_not_download_video(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     ("status", "code"),
-    [(403, "DOWNLOAD_HTTP_403"), (404, "DOWNLOAD_HTTP_404"),
-     (429, "DOWNLOAD_HTTP_429"), (500, "DOWNLOAD_HTTP_5XX"),
-     (503, "DOWNLOAD_HTTP_5XX")],
+    [
+        (403, "DOWNLOAD_HTTP_403"),
+        (404, "DOWNLOAD_HTTP_404"),
+        (429, "DOWNLOAD_HTTP_429"),
+        (500, "DOWNLOAD_HTTP_5XX"),
+        (503, "DOWNLOAD_HTTP_5XX"),
+    ],
 )
 def test_download_http_error_stage_and_privacy(tmp_path, downloader, status, code, capsys):
     source = YouTubeSource(URL, audio_language="es")
@@ -450,12 +454,14 @@ def test_audio_errors_have_structured_stage():
     with pytest.raises(YouTubeError) as missing:
         select_audio([])
     assert (missing.value.code, missing.value.stage) == (
-        "AUDIO_FORMAT_NOT_FOUND", "AUDIO_SELECTION"
+        "AUDIO_FORMAT_NOT_FOUND",
+        "AUDIO_SELECTION",
     )
     with pytest.raises(YouTubeError) as language:
         select_audio([track(language="en")], "es")
     assert (language.value.code, language.value.stage) == (
-        "AUDIO_LANGUAGE_UNAVAILABLE", "AUDIO_SELECTION"
+        "AUDIO_LANGUAGE_UNAVAILABLE",
+        "AUDIO_SELECTION",
     )
 
 
@@ -498,9 +504,7 @@ def test_missing_deno_not_reported_for_unrelated_http_error(tmp_path, downloader
     monkeypatch.setattr("video_transcriber.sources.youtube.shutil.which", lambda _: None)
     source = YouTubeSource(URL)
     source.inspect()
-    downloader[2].process_ie_result = Mock(
-        side_effect=RuntimeError("HTTP Error 403: Forbidden")
-    )
+    downloader[2].process_ie_result = Mock(side_effect=RuntimeError("HTTP Error 403: Forbidden"))
     with pytest.raises(YouTubeError) as failure:
         source.download(tmp_path)
     assert failure.value.code == "DOWNLOAD_HTTP_403"
@@ -509,9 +513,11 @@ def test_missing_deno_not_reported_for_unrelated_http_error(tmp_path, downloader
 
 @pytest.mark.parametrize(
     ("message", "expected"),
-    [("JavaScript challenge failed", "JS_CHALLENGE_FAILED"),
-     ("Sign in with cookies", "AUTHENTICATION_FAILED"),
-     ("Video unavailable", "VIDEO_UNAVAILABLE")],
+    [
+        ("JavaScript challenge failed", "JS_CHALLENGE_FAILED"),
+        ("Sign in with cookies", "AUTHENTICATION_FAILED"),
+        ("Video unavailable", "VIDEO_UNAVAILABLE"),
+    ],
 )
 def test_structured_extractor_errors(downloader, monkeypatch, message, expected):
     monkeypatch.setattr("video_transcriber.sources.youtube.shutil.which", lambda _: "deno")
