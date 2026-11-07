@@ -19,6 +19,7 @@ class ProgressReporter:
 
     def start(self, stage: str) -> None:
         self.stage_started[stage] = self.clock()
+        self.last_percent.pop(stage, None)
         if self.enabled:
             print(f"[PROGRESS] {stage}: starting", flush=True)
 
@@ -27,6 +28,9 @@ class ProgressReporter:
         if since is None:
             return
         seconds = max(0.0, self.clock() - since)
+        if stage == "transcription" and stage in self.last_percent:
+            # Confirm actual completion even when the last segment ends before the media duration.
+            self.fraction(stage, 1, 1)
         self.stage_durations[stage] = seconds
         if self.enabled:
             print(f"[PROGRESS] {stage}: done ({seconds:.1f}s)", flush=True)
