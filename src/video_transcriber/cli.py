@@ -94,6 +94,7 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
 
     pending: list[tuple[Exporter, Path]] = []
     completed: list[Path] = []
+    raced_output = False
     audio: Path | None = None
     try:
         source = YouTubeSource(
@@ -179,6 +180,7 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
             except FileExistsError:
                 if not args.overwrite and target.is_file():
                     print(f"Skipped: {target.name} (output appeared during processing)")
+                    raced_output = True
                     continue
                 raise YouTubeError(
                     "Export target already exists; downloaded audio retained",
@@ -211,7 +213,7 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
     for target in completed:
         print(f"Transcribed: {audio.name} -> {target} ({result.language})")
     reporter.summary()
-    if not args.keep_audio:
+    if not args.keep_audio and not raced_output:
         try:
             source.cleanup()
         except OSError:
