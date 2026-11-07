@@ -55,8 +55,7 @@ def test_json_and_timestamped_txt(tmp_path):
     assert evaluate_files(reference, hypothesis)["wer"] == 0
     txt = tmp_path / "hypothesis.txt"
     txt.write_text(
-        "[00:00:00 - 00:00:01] Hola mundo\n\n"
-        "[00:00:01 - 00:00:02] Adiós\n\n",
+        "[00:00:00 - 00:00:01] Hola mundo\n\n[00:00:01 - 00:00:02] Adiós\n\n",
         encoding="utf-8",
     )
     assert evaluate_files(reference, txt)["cer"] == 0
