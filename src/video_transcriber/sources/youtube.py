@@ -134,7 +134,7 @@ def _http_status(exc: Exception) -> int | None:
         current = current.__cause__ or current.__context__
     # DownloadError commonly flattens an HTTPError into its message.
     # Read only a numeric status, never present upstream text to the caller.
-    match = re.search(r"\\bHTTP Error ([1-5][0-9]{2})\\b", str(exc), re.I)
+    match = re.search(r"\bHTTP Error ([1-5][0-9]{2})\b", str(exc), re.I)
     return int(match[1]) if match else None
 
 
