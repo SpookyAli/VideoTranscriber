@@ -5,6 +5,8 @@ import re
 import unicodedata
 from pathlib import Path
 
+from rapidfuzz.distance import Levenshtein
+
 MAX_EVALUATION_BYTES = 2_000_000
 _TIMESTAMP_PREFIX = re.compile(r"^\[\d{2,}:\d{2}:\d{2} - \d{2,}:\d{2}:\d{2}\]\s*")
 
@@ -42,25 +44,6 @@ def normalize(text: str) -> str:
     return " ".join(re.findall(r"\w+", value, flags=re.UNICODE))
 
 
-def edit_distance(reference: list[str] | str, hypothesis: list[str] | str) -> int:
-    """Levenshtein substitutions, insertions, deletions with linear memory."""
-    if len(reference) < len(hypothesis):
-        reference, hypothesis = hypothesis, reference
-    previous = list(range(len(hypothesis) + 1))
-    for i, left in enumerate(reference, 1):
-        current = [i]
-        for j, right in enumerate(hypothesis, 1):
-            current.append(
-                min(
-                    previous[j] + 1,
-                    current[j - 1] + 1,
-                    previous[j - 1] + (left != right),
-                )
-            )
-        previous = current
-    return previous[-1]
-
-
 def evaluate(reference_text: str, hypothesis_text: str) -> dict:
     """Compute word and character error rates against a nonempty human reference."""
     reference = normalize(reference_text)
@@ -68,8 +51,8 @@ def evaluate(reference_text: str, hypothesis_text: str) -> dict:
     if not reference:
         raise ValueError("Reference text has no words after normalization")
     ref_words, hyp_words = reference.split(), hypothesis.split()
-    word_errors = edit_distance(ref_words, hyp_words)
-    char_errors = edit_distance(reference, hypothesis)
+    word_errors = Levenshtein.distance(ref_words, hyp_words)
+    char_errors = Levenshtein.distance(reference, hypothesis)
     return {
         "normalization": "NFC,casefold,unicode_words,no_punctuation,collapsed_spaces",
         "reference_words": len(ref_words),
