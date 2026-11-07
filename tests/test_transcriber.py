@@ -58,3 +58,37 @@ def test_lazy_decoder_failure(monkeypatch):
 def test_config_validation(options):
     with pytest.raises(ValueError):
         TranscriptionConfig(**options)
+
+
+def test_lazy_transcription_reports_segment_progress(monkeypatch):
+    model = Mock()
+    model.transcribe.return_value = (
+        iter([
+            SimpleNamespace(start=0.0, end=2.0, text=" Hola "),
+            SimpleNamespace(start=2.0, end=5.0, text=" Mundo "),
+        ]),
+        SimpleNamespace(language="es", language_probability=0.9, duration=10.0),
+    )
+    monkeypatch.setitem(
+        sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=Mock(return_value=model))
+    )
+    progress = Mock()
+    result = Transcriber(TranscriptionConfig()).transcribe(
+        Path("video.webm"), progress=progress
+    )
+    assert [segment.text for segment in result.segments] == ["Hola", "Mundo"]
+    assert progress.call_args_list == [((2.0, 10.0),), ((5.0, 10.0),)]
+
+
+def test_progress_unknown_duration(monkeypatch):
+    model = Mock()
+    model.transcribe.return_value = (
+        iter([SimpleNamespace(start=0, end=1.5, text=" hi ")]),
+        SimpleNamespace(language="en", language_probability=0.8),
+    )
+    monkeypatch.setitem(
+        sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=Mock(return_value=model))
+    )
+    progress = Mock()
+    Transcriber(TranscriptionConfig()).transcribe(Path("audio.webm"), progress=progress)
+    progress.assert_called_once_with(1.5, None)
