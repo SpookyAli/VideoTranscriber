@@ -74,6 +74,7 @@ def _config(args: argparse.Namespace) -> TranscriptionConfig:
 
 def transcribe_youtube(args: argparse.Namespace) -> int:
     reporter = ProgressReporter(args.progress)
+
     def debug(message: str) -> None:
         if args.debug:
             print(f"[DEBUG] {message}")
