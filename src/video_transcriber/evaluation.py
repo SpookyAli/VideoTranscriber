@@ -28,8 +28,10 @@ def read_transcript(path: Path) -> str:
                 not isinstance(document, dict)
                 or document.get("schema_version") != 1
                 or not isinstance(document.get("segments"), list)
-                or any(not isinstance(s, dict) or not isinstance(s.get("text"), str)
-                       for s in document["segments"])
+                or any(
+                    not isinstance(s, dict) or not isinstance(s.get("text"), str)
+                    for s in document["segments"]
+                )
             ):
                 raise ValueError
             return " ".join(s["text"] for s in document["segments"])
