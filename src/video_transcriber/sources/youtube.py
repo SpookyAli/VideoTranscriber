@@ -150,11 +150,16 @@ def _failure(exc: Exception, deno: bool, stage: str) -> YouTubeError:
             else:
                 code = "DOWNLOAD_FAILED"
             descriptions = {
-                403: "YouTube rejected the media download request (HTTP 403). Verify download permissions and yt-dlp compatibility.",
+                403: (
+                    "YouTube rejected the media download request (HTTP 403). "
+                    "Verify download permissions and yt-dlp compatibility."
+                ),
                 404: "The requested media resource was not found (HTTP 404).",
                 429: "The remote server rejected the request due to rate limiting (HTTP 429).",
             }
-            detail = descriptions.get(status, "The remote server rejected the media download request.")
+            detail = descriptions.get(
+                status, "The remote server rejected the media download request."
+            )
         else:
             code = "METADATA_EXTRACTION_FAILED"
             detail = f"YouTube metadata request failed (HTTP {status})."
@@ -179,7 +184,10 @@ def _failure(exc: Exception, deno: bool, stage: str) -> YouTubeError:
         detail = (
             "YouTube metadata extraction failed; check connectivity and yt-dlp compatibility"
             if stage == "METADATA_EXTRACTION"
-            else "YouTube media download failed; check connectivity, download permissions, and yt-dlp compatibility"
+            else (
+                "YouTube media download failed; check connectivity, download permissions, "
+                "and yt-dlp compatibility"
+            )
         )
     return YouTubeError(detail, code=code, stage=stage)
 
