@@ -50,3 +50,24 @@ def test_transcription_uses_known_duration_only(capsys):
     assert "[PROGRESS] transcription: 30%" in output
     assert "[PROGRESS] transcription: 100%" in output
     assert output.count("[PROGRESS] transcription:") == 2
+
+
+def test_completed_transcription_reports_100_percent_only_on_success(capsys):
+    reporter = ProgressReporter(True)
+    reporter.start("transcription")
+    reporter.segment_hook(9, 10)
+    reporter.finish("transcription")
+    logs = capsys.readouterr().out
+    assert "[PROGRESS] transcription: 90%" in logs
+    assert "[PROGRESS] transcription: 100%" in logs
+
+
+def test_progress_resets_for_next_batch_file(capsys):
+    reporter = ProgressReporter(True)
+    for _ in range(2):
+        reporter.start("transcription")
+        reporter.segment_hook(3, 10)
+        reporter.finish("transcription")
+    logs = capsys.readouterr().out
+    assert logs.count("[PROGRESS] transcription: 30%") == 2
+    assert logs.count("[PROGRESS] transcription: 100%") == 2
