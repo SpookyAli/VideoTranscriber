@@ -56,7 +56,11 @@ class ProgressReporter:
                 self.fraction("download", downloaded, total)
 
     def segment_hook(self, end_seconds: float, duration_seconds: float | None) -> None:
-        if duration_seconds is not None and math.isfinite(duration_seconds) and duration_seconds > 0:
+        if (
+            duration_seconds is not None
+            and math.isfinite(duration_seconds)
+            and duration_seconds > 0
+        ):
             self.media_seconds = duration_seconds
         self.fraction("transcription", end_seconds, duration_seconds)
 
