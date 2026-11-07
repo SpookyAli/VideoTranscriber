@@ -1,6 +1,8 @@
 """Model ownership and structured transcription; no output formatting."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
+import math
 from pathlib import Path
 
 from video_transcriber.config import TranscriptionConfig
@@ -36,13 +38,20 @@ class Transcriber:
             local_files_only=config.local_files_only,
         )
 
-    def transcribe(self, path: Path) -> Transcription:
+    def transcribe(
+        self, path: Path, *, progress: Callable[[float, float | None], None] | None = None
+    ) -> Transcription:
         segments, info = self.model.transcribe(
             str(path), language=self.config.language, vad_filter=True
         )
         # Faster-Whisper executes lazily: consume inside the caller's error boundary.
-        return Transcription(
-            tuple(Segment(s.start, s.end, s.text.strip()) for s in segments),
-            info.language,
-            info.language_probability,
-        )
+        # Segment timestamps are the only available progress signal without probing media.
+        duration = getattr(info, "duration", None)
+        if not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration <= 0:
+            duration = None
+        collected = []
+        for segment in segments:
+            collected.append(Segment(segment.start, segment.end, segment.text.strip()))
+            if progress is not None:
+                progress(segment.end, duration)
+        return Transcription(tuple(collected), info.language, info.language_probability)
