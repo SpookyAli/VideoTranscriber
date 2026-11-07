@@ -8,7 +8,20 @@ from urllib.parse import parse_qs, urlsplit
 
 
 class YouTubeError(RuntimeError):
-    """An actionable, credential-free source failure."""
+    """A credential-free, structured YouTube source failure."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "DOWNLOAD_FAILED",
+        stage: str = "DOWNLOAD",
+        http_status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.stage = stage
+        self.http_status = http_status
 
 
 def validate_url(url: str) -> str:
@@ -59,7 +72,11 @@ def select_audio(
         and not f.get("has_drm")
     ]
     if not audio:
-        raise YouTubeError("No permitted audio-only formats are available for this video")
+        raise YouTubeError(
+            "No permitted audio-only formats are available for this video",
+            code="AUDIO_FORMAT_NOT_FOUND",
+            stage="AUDIO_SELECTION",
+        )
     wanted = _language(language)
     if wanted:
         matching = [
@@ -71,7 +88,9 @@ def select_audio(
             available = [x for x in available if re.fullmatch(r"[a-z0-9-]{1,35}", x)]
             raise YouTubeError(
                 "Requested audio language is unavailable. "
-                f"Available languages: {', '.join(available)}"
+                f"Available languages: {', '.join(available)}",
+                code="AUDIO_LANGUAGE_UNAVAILABLE",
+                stage="AUDIO_SELECTION",
             )
         audio = matching
     elif not any(_original(f) for f in audio):
@@ -98,26 +117,71 @@ class _QuietLogger:
     info = warning = error = debug
 
 
-def _failure(exc: Exception, deno: bool) -> YouTubeError:
-    # Classify internally, but never include upstream text (URLs/headers/cookies).
+def _http_status(exc: Exception) -> int | None:
+    """Read HTTP status from known wrappers before a narrow yt-dlp text fallback."""
+    from urllib.error import HTTPError as UrllibHTTPError
+
+    from yt_dlp.utils import HTTPError as YtdlpHTTPError
+
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, (YtdlpHTTPError, UrllibHTTPError)):
+            status = getattr(current, "status", None) or getattr(current, "code", None)
+            if isinstance(status, int) and 100 <= status <= 599:
+                return status
+        current = current.__cause__ or current.__context__
+    # DownloadError commonly flattens an HTTPError into its message.
+    # Read only a numeric status, never present upstream text to the caller.
+    match = re.search(r"\\bHTTP Error ([1-5][0-9]{2})\\b", str(exc), re.I)
+    return int(match[1]) if match else None
+
+
+def _failure(exc: Exception, deno: bool, stage: str) -> YouTubeError:
+    """Map external errors to allowlisted messages without exposing upstream text."""
+    status = _http_status(exc)
+    if status is not None:
+        if stage == "DOWNLOAD":
+            if status in {403, 404, 429}:
+                code = f"DOWNLOAD_HTTP_{status}"
+            elif status >= 500:
+                code = "DOWNLOAD_HTTP_5XX"
+            else:
+                code = "DOWNLOAD_FAILED"
+            descriptions = {
+                403: "YouTube rejected the media download request (HTTP 403). Verify download permissions and yt-dlp compatibility.",
+                404: "The requested media resource was not found (HTTP 404).",
+                429: "The remote server rejected the request due to rate limiting (HTTP 429).",
+            }
+            detail = descriptions.get(status, "The remote server rejected the media download request.")
+        else:
+            code = "METADATA_EXTRACTION_FAILED"
+            detail = f"YouTube metadata request failed (HTTP {status})."
+        return YouTubeError(detail, code=code, stage=stage, http_status=status)
+
     message = str(exc).lower()
     if any(word in message for word in ("javascript", "challenge", "js runtime", "signature")):
-        detail = "JavaScript challenge failed; install/check Deno and yt-dlp-ejs"
+        code = "JS_CHALLENGE_FAILED" if deno else "JS_RUNTIME_UNAVAILABLE"
+        detail = (
+            "JavaScript challenge failed; check Deno and yt-dlp-ejs"
+            if deno
+            else "JavaScript runtime unavailable; Deno was not found on PATH"
+        )
     elif any(word in message for word in ("cookie", "sign in", "login", "members-only", "private")):
-        detail = (
-            "YouTube access/authentication failed; sign in locally using a browser with legitimate "
-            "access, then use --browser firefox (or chrome/edge)"
-        )
+        code = "AUTHENTICATION_FAILED"
+        detail = "YouTube access/authentication failed; verify legitimate access and browser login"
     elif any(word in message for word in ("unavailable", "removed", "not available")):
-        detail = "Video unavailable; check its URL and availability in your region/account"
+        code = "VIDEO_UNAVAILABLE"
+        detail = "Video unavailable; check its URL and availability in your account or region"
     else:
+        code = "METADATA_EXTRACTION_FAILED" if stage == "METADATA_EXTRACTION" else "DOWNLOAD_FAILED"
         detail = (
-            "YouTube metadata/download failed; check connectivity, video/download permissions, "
-            "and yt-dlp compatibility"
+            "YouTube metadata extraction failed; check connectivity and yt-dlp compatibility"
+            if stage == "METADATA_EXTRACTION"
+            else "YouTube media download failed; check connectivity, download permissions, and yt-dlp compatibility"
         )
-    if not deno:
-        detail += ". Deno was not found on PATH; install Deno and reopen the terminal"
-    return YouTubeError(detail)
+    return YouTubeError(detail, code=code, stage=stage)
 
 
 class YouTubeSource:
@@ -166,10 +230,18 @@ class YouTubeSource:
             with YoutubeDL(self.options) as ydl:
                 info = ydl.extract_info(self.url, download=False)
             if not info or info.get("_type", "video") != "video":
-                raise YouTubeError("Expected a single YouTube video, not a playlist")
+                raise YouTubeError(
+                    "Expected a single YouTube video, not a playlist",
+                    code="METADATA_EXTRACTION_FAILED",
+                    stage="METADATA_EXTRACTION",
+                )
             video_id = self.url.rsplit("=", 1)[1]
             if info.get("id") != video_id:
-                raise YouTubeError("YouTube returned an unexpected video identity")
+                raise YouTubeError(
+                    "YouTube returned an unexpected video identity",
+                    code="METADATA_EXTRACTION_FAILED",
+                    stage="METADATA_EXTRACTION",
+                )
             select_audio(info.get("formats", []), self.audio_language, self.prefer_original)
             title = sanitize_filename(str(info.get("title") or video_id), restricted=False)
             # The appended video ID also prevents bare Windows reserved device names.
@@ -180,13 +252,17 @@ class YouTubeSource:
         except YouTubeError:
             raise
         except Exception as exc:
-            raise _failure(exc, self.deno) from None
+            raise _failure(exc, self.deno, "METADATA_EXTRACTION") from None
 
     def download(self, directory: Path) -> Path:
         from yt_dlp import YoutubeDL
 
         if not self.info:
-            raise YouTubeError("Inspect video metadata before downloading")
+            raise YouTubeError(
+                "Inspect video metadata before downloading",
+                code="METADATA_EXTRACTION_FAILED",
+                stage="METADATA_EXTRACTION",
+            )
         try:
             directory.mkdir(parents=True, exist_ok=True)
             self.directory = Path(tempfile.mkdtemp(prefix="youtube-", dir=directory)).resolve()
@@ -207,12 +283,16 @@ class YouTubeSource:
                 downloads = result.get("requested_downloads") or [result]
                 path = Path(downloads[0].get("filepath") or ydl.prepare_filename(result)).resolve()
             if path.parent != self.directory or not path.is_file() or path.is_symlink():
-                raise YouTubeError("Downloader did not return a valid owned audio file")
+                raise YouTubeError(
+                    "Downloader did not return a valid owned audio file",
+                    code="DOWNLOADED_FILE_INVALID",
+                    stage="DOWNLOADED_FILE_VALIDATION",
+                )
             return path
         except YouTubeError:
             raise
         except Exception as exc:
-            raise _failure(exc, self.deno) from None
+            raise _failure(exc, self.deno, "DOWNLOAD") from None
 
     def cleanup(self) -> None:
         """Only call after successful export, and only remove our private directory."""
