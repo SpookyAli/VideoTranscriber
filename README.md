@@ -245,3 +245,35 @@ real yt-dlp API-contract test with a local fake download and the existing real
 Faster-Whisper/PyAV decoding regression. CI does not need Deno, browser profiles,
 YouTube access, model weights, or credentials. Live YouTube authentication/challenge
 solving and transcription remain separate manual checks on the user's machine.
+
+## YouTube diagnostics (V1.1.1)
+
+Use `--debug` with `--url` to show safe diagnostic stage transitions,
+selected audio language/format when available, and classified failure codes:
+
+```powershell
+python main.py transcribe --url "https://www.youtube.com/watch?v=IfWWpDrF8hk" --browser firefox --audio-language es --language es --model medium --model-dir models --debug
+```
+
+The debugger prints only allowlisted data: video ID, recognized language tags,
+format identifier, container, stage and HTTP status. It does not print raw upstream
+logs, authentication cookies, media URLs, request headers, or exception tracebacks.
+
+Key error codes include `METADATA_EXTRACTION_FAILED`,
+`AUDIO_LANGUAGE_UNAVAILABLE`, `AUDIO_FORMAT_NOT_FOUND`,
+`DOWNLOAD_HTTP_403`, `DOWNLOAD_HTTP_404`, `DOWNLOAD_HTTP_429`,
+`DOWNLOAD_HTTP_5XX`, `DOWNLOAD_FAILED`, `AUTHENTICATION_FAILED`,
+`JS_RUNTIME_UNAVAILABLE`, `JS_CHALLENGE_FAILED`,
+`TRANSCRIPTION_FAILED`, and `EXPORT_FAILED`.
+
+An HTTP 403 at the download stage means that the media server rejected the
+download request. Metadata being accessible, or a video being playable in a
+browser, does not establish that a separate download is allowed; HTTP 403 does
+not identify a single underlying cause or prove a missing token. The patch does
+not implement new download strategies, bypass access restrictions, or resolve
+server-side HTTP 403. HTTP 404 indicates the requested resource was not found,
+HTTP 429 is rate limiting, and HTTP 5xx is a server-side response. If metadata
+fails, check URL, connection, service availability and authentication. If Deno
+challenge solving fails, inspect its installation and the yt-dlp/EJS dependency
+versions. Audio-track mismatch is reported without silently choosing a different
+language. Existing downloaded audio is retained after transcription/export failure.
