@@ -6,6 +6,7 @@ from pathlib import Path
 
 from video_transcriber.config import COMPUTE_TYPES, MODELS, TranscriptionConfig
 from video_transcriber.exporters import Exporter, TxtExporter
+from video_transcriber.progress import ProgressReporter
 from video_transcriber.sources.youtube import YouTubeError, YouTubeSource, select_audio
 from video_transcriber.transcriber import Transcriber
 
@@ -36,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--no-timestamps", action="store_true")
     command.add_argument("--overwrite", action="store_true")
     command.add_argument("--debug", action="store_true", help="Show safe stage-based diagnostics")
+    command.add_argument("--progress", action="store_true", help="Show stage, download and transcription progress")
     return parser
 
 
@@ -69,6 +71,7 @@ def _config(args: argparse.Namespace) -> TranscriptionConfig:
 
 
 def transcribe_youtube(args: argparse.Namespace) -> int:
+    reporter = ProgressReporter(args.progress)
     def debug(message: str) -> None:
         if args.debug:
             print(f"[DEBUG] {message}")
@@ -93,7 +96,9 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
     debug("Source: YouTube")
     debug(f"Video ID: {source.url.rsplit('=', 1)[1]}")
     try:
+        reporter.start("metadata")
         source.inspect()
+        reporter.finish("metadata")
         debug("Metadata extraction: OK")
         selected = select_audio(
             source.info.get("formats", []), source.audio_language, source.prefer_original
@@ -119,10 +124,27 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
             print(f"Skipped: {target.name} (output exists)")
             return 0
         debug("Download: starting")
-        audio = source.download(args.download_dir or Path("input"))
+        reporter.start("download")
+        if args.progress:
+            audio = source.download(
+                args.download_dir or Path("input"), progress_hook=reporter.download_hook
+            )
+        else:
+            audio = source.download(args.download_dir or Path("input"))
+        reporter.finish("download")
         debug("Download: OK")
         try:
-            result = Transcriber(_config(args)).transcribe(audio)
+            reporter.start("model")
+            reporter.start("model")
+            engine = Transcriber(_config(args))
+            reporter.finish("model")
+            reporter.finish("model")
+            reporter.start("transcription")
+            if args.progress:
+                result = engine.transcribe(audio, progress=reporter.segment_hook)
+            else:
+                result = engine.transcribe(audio)
+            reporter.finish("transcription")
         except Exception:
             raise YouTubeError(
                 "Model loading or audio transcription failed; downloaded audio retained",
@@ -131,9 +153,11 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
             ) from None
         debug("Transcription: OK")
         try:
+            reporter.start("export")
             TxtExporter(timestamps=not args.no_timestamps).export(
                 result, target, overwrite=args.overwrite
             )
+            reporter.finish("export")
         except FileExistsError:
             raise
         except Exception:
@@ -168,6 +192,7 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
         )
         return 1
     print(f"Transcribed: {audio.name} -> {target} ({result.language})")
+    reporter.summary()
     if not args.keep_audio:
         try:
             source.cleanup()
@@ -206,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     exporter: Exporter = TxtExporter(timestamps=not args.no_timestamps)
+    reporter = ProgressReporter(args.progress)
     pending: list[tuple[Path, Path]] = []
     skipped = 0
     for source in files:
@@ -226,8 +252,15 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for source, target in pending:
                 try:
-                    result = engine.transcribe(source)
+                    reporter.start("transcription")
+                    if args.progress:
+                        result = engine.transcribe(source, progress=reporter.segment_hook)
+                    else:
+                        result = engine.transcribe(source)
+                    reporter.finish("transcription")
+                    reporter.start("export")
                     exporter.export(result, target, overwrite=args.overwrite)
+                    reporter.finish("export")
                 except FileExistsError:
                     if not args.overwrite and target.is_file():
                         skipped += 1
@@ -242,4 +275,5 @@ def main(argv: list[str] | None = None) -> int:
                     succeeded += 1
                     print(f"Transcribed: {source.name} -> {target} ({result.language})")
     print(f"Summary: {succeeded} succeeded, {skipped} skipped, {failed} failed")
+    reporter.summary()
     return 1 if failed else 0
