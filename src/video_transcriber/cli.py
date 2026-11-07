@@ -6,7 +6,7 @@ from pathlib import Path
 
 from video_transcriber.config import COMPUTE_TYPES, MODELS, TranscriptionConfig
 from video_transcriber.exporters import Exporter, TxtExporter
-from video_transcriber.sources.youtube import YouTubeError, YouTubeSource
+from video_transcriber.sources.youtube import YouTubeError, YouTubeSource, select_audio
 from video_transcriber.transcriber import Transcriber
 
 
@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--local-files-only", action="store_true", help="Never download models")
     command.add_argument("--no-timestamps", action="store_true")
     command.add_argument("--overwrite", action="store_true")
+    command.add_argument("--debug", action="store_true", help="Show safe stage-based diagnostics")
     return parser
 
 
@@ -68,6 +69,11 @@ def _config(args: argparse.Namespace) -> TranscriptionConfig:
 
 
 def transcribe_youtube(args: argparse.Namespace) -> int:
+    def debug(message: str) -> None:
+        if args.debug:
+            print(f"[DEBUG] {message}")
+
+    target: Path | None = None
     try:
         source = YouTubeSource(
             args.url,
@@ -77,35 +83,84 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
         )
         args.output.mkdir(parents=True, exist_ok=True)
     except (ValueError, OSError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        # URL validation produces a fixed error, but avoid echoing arbitrary filesystem errors.
+        if isinstance(exc, ValueError):
+            print(f"Error [INVALID_YOUTUBE_URL]: {exc}", file=sys.stderr)
+        else:
+            print("Error: Could not create the output directory", file=sys.stderr)
         return 2
+
+    debug("Source: YouTube")
+    debug(f"Video ID: {source.url.rsplit('=', 1)[1]}")
     try:
         source.inspect()
+        debug("Metadata extraction: OK")
+        selected = select_audio(
+            source.info.get("formats", []), source.audio_language, source.prefer_original
+        )
+        debug("Audio selection: OK")
+        if args.audio_language:
+            debug(f"Requested language: {args.audio_language}")
+        if selected:
+            # Only allowlist safe language tags and format identifiers in debug output.
+            import re
+
+            language = str(selected.get("language") or "")
+            fmt_id = str(selected.get("format_id") or "")
+            ext = str(selected.get("ext") or "")
+            if re.fullmatch(r"[A-Za-z0-9-]{1,35}", language):
+                debug(f"Selected language: {language}")
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,35}", fmt_id):
+                debug(f"Selected format: {fmt_id}")
+            if re.fullmatch(r"[a-z0-9]{1,12}", ext):
+                debug(f"Audio container: {ext}")
         target = args.output / (source.stem + ".txt")
         if target.exists() and not args.overwrite:
             print(f"Skipped: {target.name} (output exists)")
             return 0
+        debug("Download: starting")
         audio = source.download(args.download_dir or Path("input"))
-        result = Transcriber(_config(args)).transcribe(audio)
-        TxtExporter(timestamps=not args.no_timestamps).export(
-            result, target, overwrite=args.overwrite
-        )
+        debug("Download: OK")
+        try:
+            result = Transcriber(_config(args)).transcribe(audio)
+        except Exception:
+            raise YouTubeError(
+                "Model loading or audio transcription failed; downloaded audio retained",
+                code="TRANSCRIPTION_FAILED",
+                stage="TRANSCRIPTION",
+            ) from None
+        debug("Transcription: OK")
+        try:
+            TxtExporter(timestamps=not args.no_timestamps).export(
+                result, target, overwrite=args.overwrite
+            )
+        except FileExistsError:
+            raise
+        except Exception:
+            raise YouTubeError(
+                "TXT export failed; downloaded audio retained",
+                code="EXPORT_FAILED",
+                stage="TXT_EXPORT",
+            ) from None
+        debug("TXT export: OK")
     except FileExistsError:
-        if not args.overwrite and target.is_file():
+        if not args.overwrite and target is not None and target.is_file():
             print(f"Skipped: {target.name} (output appeared during processing); audio retained")
             return 0
-        print("Failed: output path exists; downloaded audio retained", file=sys.stderr)
+        print("Failed [EXPORT_FAILED]: output path exists; downloaded audio retained", file=sys.stderr)
         return 1
     except YouTubeError as exc:
-        print(f"Failed: {exc}", file=sys.stderr)
+        debug(f"{exc.stage}: FAILED")
+        if exc.http_status is not None:
+            debug(f"HTTP status: {exc.http_status}")
+        print(f"Failed [{exc.code}] ({exc.stage}): {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("Interrupted: any downloaded/partial audio has been retained", file=sys.stderr)
         return 130
     except Exception:
         print(
-            "Failed: model loading, audio decoding/transcription, or TXT export failed; "
-            "downloaded audio retained. Check model availability, media, and output permissions.",
+            "Failed: unexpected processing failure; downloaded audio retained",
             file=sys.stderr,
         )
         return 1
