@@ -121,7 +121,7 @@ def _http_status(exc: Exception) -> int | None:
     """Read HTTP status from known wrappers before a narrow yt-dlp text fallback."""
     from urllib.error import HTTPError as UrllibHTTPError
 
-    from yt_dlp.utils import HTTPError as YtdlpHTTPError
+    from yt_dlp.networking.exceptions import HTTPError as YtdlpHTTPError
 
     current: BaseException | None = exc
     visited: set[int] = set()
