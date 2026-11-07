@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from video_transcriber.config import COMPUTE_TYPES, MODELS, TranscriptionConfig
-from video_transcriber.exporters import Exporter, TxtExporter
+from video_transcriber.exporters import FORMATS, Exporter, exporters_for
 from video_transcriber.progress import ProgressReporter
 from video_transcriber.sources.youtube import YouTubeError, YouTubeSource, select_audio
 from video_transcriber.transcriber import Transcriber
@@ -13,7 +13,7 @@ from video_transcriber.transcriber import Transcriber
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Transcribe local WEBM files or YouTube audio to UTF-8 TXT."
+        description="Transcribe local WEBM files or YouTube audio to TXT, SRT or JSON."
     )
     commands = parser.add_subparsers(dest="command", required=True)
     command = commands.add_parser(
@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--model-dir", type=Path, help="Persistent model cache directory")
     command.add_argument("--local-files-only", action="store_true", help="Never download models")
     command.add_argument("--no-timestamps", action="store_true")
+    command.add_argument("--format", choices=FORMATS, default="txt", help="Default: txt")
     command.add_argument("--overwrite", action="store_true")
     command.add_argument("--debug", action="store_true", help="Show safe stage-based diagnostics")
     command.add_argument(
@@ -72,14 +73,28 @@ def _config(args: argparse.Namespace) -> TranscriptionConfig:
     )
 
 
+def _pending_exports(
+    stem: str, output: Path, exporters: tuple[Exporter, ...], overwrite: bool
+) -> list[tuple[Exporter, Path]]:
+    """Select missing outputs, retaining any existing formats by default."""
+    return [
+        (exporter, output / (stem + exporter.suffix))
+        for exporter in exporters
+        if overwrite or not (output / (stem + exporter.suffix)).exists()
+    ]
+
+
 def transcribe_youtube(args: argparse.Namespace) -> int:
     reporter = ProgressReporter(args.progress)
+    exporters = exporters_for(args.format, timestamps=not args.no_timestamps)
 
     def debug(message: str) -> None:
         if args.debug:
             print(f"[DEBUG] {message}")
 
-    target: Path | None = None
+    pending: list[tuple[Exporter, Path]] = []
+    completed: list[Path] = []
+    audio: Path | None = None
     try:
         source = YouTubeSource(
             args.url,
@@ -89,7 +104,6 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
         )
         args.output.mkdir(parents=True, exist_ok=True)
     except (ValueError, OSError) as exc:
-        # URL validation produces a fixed error, but avoid echoing arbitrary filesystem errors.
         if isinstance(exc, ValueError):
             print(f"Error [INVALID_YOUTUBE_URL]: {exc}", file=sys.stderr)
         else:
@@ -110,7 +124,6 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
         if args.audio_language:
             debug(f"Requested language: {args.audio_language}")
         if selected:
-            # Only allowlist safe language tags and format identifiers in debug output.
             import re
 
             language = str(selected.get("language") or "")
@@ -122,10 +135,12 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
                 debug(f"Selected format: {fmt_id}")
             if re.fullmatch(r"[a-z0-9]{1,12}", ext):
                 debug(f"Audio container: {ext}")
-        target = args.output / (source.stem + ".txt")
-        if target.exists() and not args.overwrite:
-            print(f"Skipped: {target.name} (output exists)")
+
+        pending = _pending_exports(source.stem, args.output, exporters, args.overwrite)
+        if not pending:
+            print(f"Skipped: {source.stem} (all requested outputs exist)")
             return 0
+
         debug("Download: starting")
         reporter.start("download")
         if args.progress:
@@ -136,11 +151,10 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
             audio = source.download(args.download_dir or Path("input"))
         reporter.finish("download")
         debug("Download: OK")
+
         try:
             reporter.start("model")
-            reporter.start("model")
             engine = Transcriber(_config(args))
-            reporter.finish("model")
             reporter.finish("model")
             reporter.start("transcription")
             if args.progress:
@@ -154,31 +168,30 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
                 code="TRANSCRIPTION_FAILED",
                 stage="TRANSCRIPTION",
             ) from None
+
         debug("Transcription: OK")
-        try:
-            reporter.start("export")
-            TxtExporter(timestamps=not args.no_timestamps).export(
-                result, target, overwrite=args.overwrite
-            )
-            reporter.finish("export")
-        except FileExistsError:
-            raise
-        except Exception:
-            raise YouTubeError(
-                "TXT export failed; downloaded audio retained",
-                code="EXPORT_FAILED",
-                stage="TXT_EXPORT",
-            ) from None
-        debug("TXT export: OK")
-    except FileExistsError:
-        if not args.overwrite and target is not None and target.is_file():
-            print(f"Skipped: {target.name} (output appeared during processing); audio retained")
-            return 0
-        print(
-            "Failed [EXPORT_FAILED]: output path exists; downloaded audio retained",
-            file=sys.stderr,
-        )
-        return 1
+        for exporter, target in pending:
+            try:
+                reporter.start("export")
+                exporter.export(result, target, overwrite=args.overwrite)
+                reporter.finish("export")
+                completed.append(target)
+            except FileExistsError:
+                if not args.overwrite and target.is_file():
+                    print(f"Skipped: {target.name} (output appeared during processing)")
+                    continue
+                raise YouTubeError(
+                    "Export target already exists; downloaded audio retained",
+                    code="EXPORT_FAILED",
+                    stage="TXT_EXPORT",
+                ) from None
+            except Exception:
+                raise YouTubeError(
+                    "Export failed; downloaded audio retained",
+                    code="EXPORT_FAILED",
+                    stage="TXT_EXPORT",
+                ) from None
+        debug("Export: OK")
     except YouTubeError as exc:
         debug(f"{exc.stage}: FAILED")
         if exc.http_status is not None:
@@ -194,14 +207,16 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"Transcribed: {audio.name} -> {target} ({result.language})")
+
+    for target in completed:
+        print(f"Transcribed: {audio.name} -> {target} ({result.language})")
     reporter.summary()
     if not args.keep_audio:
         try:
             source.cleanup()
         except OSError:
             print(
-                "Warning: TXT saved, but audio cleanup failed; remove audio manually",
+                "Warning: outputs saved, but audio cleanup failed; remove audio manually",
                 file=sys.stderr,
             )
     return 0
@@ -233,17 +248,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
-    exporter: Exporter = TxtExporter(timestamps=not args.no_timestamps)
+    exporters = exporters_for(args.format, timestamps=not args.no_timestamps)
     reporter = ProgressReporter(args.progress)
-    pending: list[tuple[Path, Path]] = []
+    pending: list[tuple[Path, list[tuple[Exporter, Path]]]] = []
     skipped = 0
     for source in files:
-        target = args.output / (source.stem + exporter.suffix)
-        if target.exists() and not args.overwrite:
-            print(f"Skipped: {source.name} (output exists)")
+        outputs = _pending_exports(source.stem, args.output, exporters, args.overwrite)
+        if not outputs:
+            print(f"Skipped: {source.name} (all requested outputs exist)")
             skipped += 1
         else:
-            pending.append((source, target))
+            pending.append((source, outputs))
 
     succeeded = failed = 0
     if pending:
@@ -255,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error loading model: {exc}", file=sys.stderr)
             failed = len(pending)
         else:
-            for source, target in pending:
+            for source, outputs in pending:
                 try:
                     reporter.start("transcription")
                     if args.progress:
@@ -263,22 +278,32 @@ def main(argv: list[str] | None = None) -> int:
                     else:
                         result = engine.transcribe(source)
                     reporter.finish("transcription")
-                    reporter.start("export")
-                    exporter.export(result, target, overwrite=args.overwrite)
-                    reporter.finish("export")
-                except FileExistsError:
-                    if not args.overwrite and target.is_file():
-                        skipped += 1
-                        print(f"Skipped: {source.name} (output appeared during processing)")
-                    else:
-                        failed += 1
-                        print(f"Failed: {source.name}: output path exists", file=sys.stderr)
                 except Exception as exc:
                     failed += 1
                     print(f"Failed: {source.name}: {exc}", file=sys.stderr)
+                    continue
+                export_failed = False
+                for exporter, target in outputs:
+                    try:
+                        reporter.start("export")
+                        exporter.export(result, target, overwrite=args.overwrite)
+                        reporter.finish("export")
+                    except FileExistsError:
+                        if not args.overwrite and target.is_file():
+                            print(f"Skipped: {target.name} (output appeared during processing)")
+                            continue
+                        export_failed = True
+                        print(f"Failed: {target.name}: output path exists", file=sys.stderr)
+                    except Exception as exc:
+                        export_failed = True
+                        print(f"Failed: {target.name}: {exc}", file=sys.stderr)
+                    else:
+                        print(f"Transcribed: {source.name} -> {target} ({result.language})")
+                if export_failed:
+                    failed += 1
                 else:
                     succeeded += 1
-                    print(f"Transcribed: {source.name} -> {target} ({result.language})")
+
     print(f"Summary: {succeeded} succeeded, {skipped} skipped, {failed} failed")
     reporter.summary()
     return 1 if failed else 0
