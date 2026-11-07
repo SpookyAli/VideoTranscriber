@@ -13,6 +13,7 @@ dependencies = [
     "av>=11,<18",
     "yt-dlp==2026.10.26",
     "yt-dlp-ejs==0.8.0",
+    "rapidfuzz>=3.14,<4",
 ]
 
 [project.optional-dependencies]
