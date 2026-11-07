@@ -144,7 +144,6 @@ def test_local_default_no_progress(tmp_path, engine, capsys):
     assert "[PERF]" not in output
 
 
-
 def test_local_all_formats_one_transcription_and_skip(tmp_path, engine, capsys):
     media = tmp_path / "demo.webm"
     media.touch()
@@ -194,8 +193,14 @@ def test_local_no_timestamps_does_not_change_srt(tmp_path, engine):
     media.touch()
     out = tmp_path / "out"
     args = [
-        "transcribe", "--input", str(media), "--output", str(out),
-        "--format", "all", "--no-timestamps",
+        "transcribe",
+        "--input",
+        str(media),
+        "--output",
+        str(out),
+        "--format",
+        "all",
+        "--no-timestamps",
     ]
     assert main(args) == 0
     assert (out / "demo.txt").read_text() == "Hello\n\n"
