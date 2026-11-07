@@ -216,7 +216,7 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
             source.cleanup()
         except OSError:
             print(
-                "Warning: outputs saved, but audio cleanup failed; remove audio manually",
+                "Warning: TXT saved, but audio cleanup failed; remove audio manually",
                 file=sys.stderr,
             )
     return 0
