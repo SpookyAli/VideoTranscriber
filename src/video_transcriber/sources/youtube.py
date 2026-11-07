@@ -1,9 +1,9 @@
 """Local yt-dlp integration; never expose extractor messages or browser secrets."""
 
 import re
-from collections.abc import Callable
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
