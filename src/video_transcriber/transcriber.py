@@ -1,8 +1,8 @@
 """Model ownership and structured transcription; no output formatting."""
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
-import math
 from pathlib import Path
 
 from video_transcriber.config import TranscriptionConfig
