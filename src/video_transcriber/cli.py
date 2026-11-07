@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from video_transcriber.config import COMPUTE_TYPES, MODELS, TranscriptionConfig
-from video_transcriber.exporters import FORMATS, Exporter, exporters_for
+from video_transcriber.exporters import FORMATS, Exporter, TxtExporter, exporters_for
 from video_transcriber.progress import ProgressReporter
 from video_transcriber.sources.youtube import YouTubeError, YouTubeSource, select_audio
 from video_transcriber.transcriber import Transcriber
@@ -193,7 +193,7 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
                     code="EXPORT_FAILED",
                     stage="TXT_EXPORT",
                 ) from None
-        debug("Export: OK")
+        debug("TXT export: OK" if args.format == "txt" else "Export: OK")
     except YouTubeError as exc:
         debug(f"{exc.stage}: FAILED")
         if exc.http_status is not None:
