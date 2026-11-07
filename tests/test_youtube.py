@@ -170,7 +170,12 @@ def test_safe_errors(downloader, message, expected, monkeypatch):
     assert expected in str(error.value)
     assert "SECRET" not in str(error.value)
     assert error.value.stage == "METADATA_EXTRACTION"
-    assert error.value.code in {"AUTHENTICATION_FAILED", "VIDEO_UNAVAILABLE", "JS_RUNTIME_UNAVAILABLE", "METADATA_EXTRACTION_FAILED"}
+    assert error.value.code in {
+        "AUTHENTICATION_FAILED",
+        "VIDEO_UNAVAILABLE",
+        "JS_RUNTIME_UNAVAILABLE",
+        "METADATA_EXTRACTION_FAILED",
+    }
 
 
 def test_download_failure_preserves_partial(tmp_path, downloader):
