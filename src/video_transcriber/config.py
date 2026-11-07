@@ -27,7 +27,9 @@ class TranscriptionConfig:
             raise ValueError(f"Unsupported device: {self.device}")
         if self.compute_type not in COMPUTE_TYPES:
             raise ValueError(f"Unsupported compute type: {self.compute_type}")
-        if self.beam_size is not None and (type(self.beam_size) is not int or not 1 <= self.beam_size <= 10):
+        if self.beam_size is not None and (
+            type(self.beam_size) is not int or not 1 <= self.beam_size <= 10
+        ):
             raise ValueError("Beam size must be between 1 and 10")
         if self.temperature is not None and (
             not isinstance(self.temperature, (int, float))
