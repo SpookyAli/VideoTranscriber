@@ -92,3 +92,35 @@ def test_progress_unknown_duration(monkeypatch):
     progress = Mock()
     Transcriber(TranscriptionConfig()).transcribe(Path("audio.webm"), progress=progress)
     progress.assert_called_once_with(1.5, None)
+
+
+def test_explicit_contextual_options_forwarded_to_whisper(monkeypatch):
+    model = Mock()
+    model.transcribe.return_value = (
+        iter([SimpleNamespace(start=0.0, end=1.0, text=" Mahomes ")]),
+        SimpleNamespace(language="es", language_probability=0.99),
+    )
+    monkeypatch.setitem(
+        sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=Mock(return_value=model))
+    )
+    config = TranscriptionConfig(
+        initial_prompt="Patrick Mahomes", beam_size=4, temperature=0.0
+    )
+    result = Transcriber(config).transcribe(Path("nfl.webm"))
+    assert result.segments[0].text == "Mahomes"
+    model.transcribe.assert_called_once_with(
+        "nfl.webm", language=None, vad_filter=True,
+        initial_prompt="Patrick Mahomes", beam_size=4, temperature=0.0
+    )
+
+
+@pytest.mark.parametrize("options", [
+    {"beam_size": 0},
+    {"beam_size": 11},
+    {"temperature": -0.1},
+    {"temperature": 1.1},
+    {"temperature": float("nan")},
+])
+def test_context_decoder_validation(options):
+    with pytest.raises(ValueError):
+        TranscriptionConfig(**options)
