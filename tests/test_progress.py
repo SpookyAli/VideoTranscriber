@@ -18,9 +18,7 @@ def test_opt_in_stage_timing_and_summary(capsys):
 def test_default_silent(capsys):
     reporter = ProgressReporter()
     reporter.start("download")
-    reporter.download_hook(
-        {"status": "downloading", "downloaded_bytes": 50, "total_bytes": 100}
-    )
+    reporter.download_hook({"status": "downloading", "downloaded_bytes": 50, "total_bytes": 100})
     reporter.segment_hook(4, 10)
     reporter.finish("download")
     reporter.summary()
