@@ -11,6 +11,7 @@ from video_transcriber.sources.youtube import (
     YouTubeError,
     YouTubeSource,
     select_audio,
+    select_hls_audio,
     validate_url,
 )
 from video_transcriber.transcriber import Segment, Transcription
@@ -607,3 +608,130 @@ def test_youtube_contextual_prompt_used_without_debug_disclosure(youtube_cli, ca
     assert "SECRETPROMPT" in config.initial_prompt
     output_text = capsys.readouterr()
     assert "SECRETPROMPT" not in output_text.out + output_text.err
+
+
+def hls_track(identifier="91-4", language="es-US", note="Untested, (original)", **kw):
+    return {
+        "format_id": identifier,
+        "language": language,
+        "format_note": note,
+        "vcodec": "avc1.4D400C",
+        "acodec": "mp4a.40.5",
+        "protocol": "m3u8_native",
+        "ext": "mp4",
+        "height": kw.pop("height", 144),
+        "tbr": 128,
+        **kw,
+    }
+
+
+def test_hls_selection_respects_language_original_and_small_rendition():
+    spanish = hls_track()
+    spanish_360 = hls_track("93-4", height=360)
+    english = hls_track("91-2", "en-US", "Untested")
+    bad_drm = hls_track("drm", has_drm=True)
+    no_audio = hls_track("silent", acodec="none")
+    formats = [english, bad_drm, spanish_360, no_audio, spanish]
+    assert select_hls_audio(formats, "es") is spanish
+    assert select_hls_audio(formats) is spanish
+    assert select_hls_audio(formats, "en") is english
+    assert select_hls_audio(formats, "fr") is None
+    assert select_hls_audio([english]) is None
+
+
+def test_hls_fallback_on_403_remux_and_retention(tmp_path, downloader, monkeypatch):
+    from types import SimpleNamespace
+
+    downloader[1]["formats"] = [
+        track(identifier="251-3", language="es-US"),
+        hls_track(),
+        hls_track("91-2", "en-US", "Untested"),
+    ]
+    picked = []
+
+    def process(self, result, download):
+        fmt = next(self.options["format"]({"formats": result["formats"]}))
+        picked.append(fmt["format_id"])
+        if fmt["format_id"] == "251-3":
+            raise RuntimeError("HTTP Error 403: Forbidden secret=PRIVATE")
+        assert fmt["format_id"] == "91-4"
+        path = Path(self.options["outtmpl"].replace("%%", "%").replace("%(ext)s", "mp4"))
+        path.write_bytes(b"private downloaded MPEG-TS")
+        return {"requested_downloads": [{"filepath": str(path)}]}
+
+    def ffmpeg(args, **kwargs):
+        assert args[0] == "ffmpeg"
+        assert "-c:a" in args and "copy" in args
+        Path(args[-1]).write_bytes(b"remuxed AAC")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(downloader[2], "process_ie_result", process)
+    monkeypatch.setattr("video_transcriber.sources.youtube.shutil.which", lambda name: "ffmpeg")
+    monkeypatch.setattr("video_transcriber.sources.youtube.subprocess.run", ffmpeg)
+    source = YouTubeSource(URL, browser="firefox", audio_language="es")
+    source.inspect()
+    audio = source.download(tmp_path)
+    assert picked == ["251-3", "91-4"]
+    assert source.used_hls_fallback is True
+    assert audio.suffix == ".m4a"
+    assert audio.read_bytes() == b"remuxed AAC"
+    assert not list(source.directory.glob("*.mp4"))
+    source.cleanup()
+    assert not audio.exists()
+
+
+def test_hls_fallback_missing_ffmpeg_stops_before_video(tmp_path, downloader, monkeypatch):
+    downloader[1]["formats"] = [track(), hls_track()]
+
+    def fail(self, result, download):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    monkeypatch.setattr(downloader[2], "process_ie_result", fail)
+    monkeypatch.setattr("video_transcriber.sources.youtube.shutil.which", lambda name: None)
+    source = YouTubeSource(URL, audio_language="es")
+    source.inspect()
+    with pytest.raises(YouTubeError) as failure:
+        source.download(tmp_path)
+    assert failure.value.code == "FFMPEG_UNAVAILABLE"
+    assert failure.value.stage == "AUDIO_EXTRACTION"
+
+
+def test_hls_fallback_no_matching_language_preserves_403(tmp_path, downloader):
+    downloader[1]["formats"] = [track(), hls_track(language="en-US")]
+
+    def fail(self, result, download):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    downloader[2].process_ie_result = fail
+    source = YouTubeSource(URL, audio_language="es")
+    source.inspect()
+    with pytest.raises(YouTubeError) as failure:
+        source.download(tmp_path)
+    assert failure.value.code == "DOWNLOAD_HTTP_403"
+
+
+def test_hls_fallback_extraction_failure_keeps_hls_file(tmp_path, downloader, monkeypatch):
+    from types import SimpleNamespace
+
+    downloader[1]["formats"] = [track(), hls_track()]
+
+    def process(self, result, download):
+        fmt = next(self.options["format"]({"formats": result["formats"]}))
+        if fmt["format_id"] == "a":
+            raise RuntimeError("HTTP Error 403: Forbidden")
+        path = Path(self.options["outtmpl"].replace("%%", "%").replace("%(ext)s", "mp4"))
+        path.write_bytes(b"original MPEG-TS")
+        return {"requested_downloads": [{"filepath": str(path)}]}
+
+    monkeypatch.setattr(downloader[2], "process_ie_result", process)
+    monkeypatch.setattr("video_transcriber.sources.youtube.shutil.which", lambda name: "ffmpeg")
+    monkeypatch.setattr(
+        "video_transcriber.sources.youtube.subprocess.run",
+        lambda *a, **k: SimpleNamespace(returncode=1),
+    )
+    source = YouTubeSource(URL, audio_language="es")
+    source.inspect()
+    with pytest.raises(YouTubeError) as failure:
+        source.download(tmp_path)
+    assert failure.value.code == "AUDIO_EXTRACTION_FAILED"
+    assert list(source.directory.glob("*.mp4"))
