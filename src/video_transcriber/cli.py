@@ -176,6 +176,8 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
             audio = source.download(args.download_dir or Path("input"))
         reporter.finish("download")
         debug("Download: OK")
+        if source.used_hls_fallback:
+            print("[INFO] Audio-only HTTP 403: authorized HLS audio fallback extracted via FFmpeg")
 
         try:
             reporter.start("model")
