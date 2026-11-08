@@ -404,3 +404,38 @@ included as a normal application dependency for efficient full-length evaluation
 
 No cloud transcription provider, automatic vocabulary retrieval, rewriting of
 generated transcript text, or changes to yt-dlp download mechanics are introduced.
+
+## YouTube HLS audio fallback (V1.1.2)
+
+A permitted member-only video may expose the original-language audio as an
+audio-only HTTPS format and also within an HLS video stream. In one verified
+scenario, the HTTPS audio-only downloads returned HTTP 403 while an HLS 144p
+rendition downloaded successfully. This does **not** establish the cause of the
+HTTPS rejection, nor does it guarantee HLS will work on other videos.
+
+For an authorized video, VideoTranscriber first attempts its existing audio-only
+selection. **Only if that download returns HTTP 403**, it looks for a DRM-free
+HLS MP4 rendition whose audio language is explicitly identified and matches
+`--audio-language`. When no language was requested, the fallback accepts only
+a stream explicitly marked *original*. Among eligible choices it prefers original,
+non-DRC audio and the smallest video rendition. No language substitution is
+allowed. If no suitable rendition is available, the original HTTP 403 is reported.
+
+The fallback requires an **external FFmpeg executable on PATH**. It remuxes the
+selected HLS stream's AAC audio to an M4A file using stream copy (no lossy
+re-encoding); the temporary video is removed only after a successful extraction.
+For Windows, verify `ffmpeg -version`; the previous PyAV dependency alone does
+not provide the executable. On failure, owned media is preserved for diagnosis
+and a structured failure code is printed. The download stage emits a concise
+`[INFO]` message after successful fallback. On successful transcription/export,
+the owned audio is cleaned up unless `--keep-audio` was provided.
+
+Example, using a YouTube video your account is entitled and permitted to save:
+
+```powershell
+python main.py transcribe --url "https://www.youtube.com/watch?v=IfWWpDrF8hk" --browser firefox --audio-language es --language es --model medium --model-dir models --format all --progress --debug
+```
+
+This is a compatibility fallback for an authorized media delivery method, not
+a workaround for missing membership, DRM, or a video owner denying downloads.
+An HTTP 403 can have other causes; the fallback is not guaranteed to succeed.
