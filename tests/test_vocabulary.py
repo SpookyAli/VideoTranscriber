@@ -14,9 +14,7 @@ def test_builtin_nfl_vocabulary_is_opt_in():
 
 def test_prompt_file_dedup_and_preserve_unicode(tmp_path):
     path = tmp_path / "terms.txt"
-    path.write_text(
-        "# Glossary\nPatrick Mahomes\nMÁQUINA\npatrick mahomes\n", encoding="utf-8"
-    )
+    path.write_text("# Glossary\nPatrick Mahomes\nMÁQUINA\npatrick mahomes\n", encoding="utf-8")
     prompt = build_prompt("NFL en español.", "nfl", path)
     assert prompt.startswith("NFL en español.")
     assert prompt.count("Patrick Mahomes") == 1
