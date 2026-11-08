@@ -596,3 +596,14 @@ def test_youtube_json_export_failure_keeps_audio(youtube_cli, monkeypatch):
     )
     assert main(youtube_cli[0] + ["--format", "json"]) == 1
     assert list(youtube_cli[1].rglob("*.m4a"))
+
+
+def test_youtube_contextual_prompt_used_without_debug_disclosure(youtube_cli, capsys):
+    args, downloads, output, factory, engine = youtube_cli
+    options = ["--vocabulary-profile", "nfl", "--initial-prompt", "SECRETPROMPT", "--debug"]
+    assert main(args + options) == 0
+    config = factory.call_args.args[0]
+    assert "Patrick Mahomes" in config.initial_prompt
+    assert "SECRETPROMPT" in config.initial_prompt
+    output_text = capsys.readouterr()
+    assert "SECRETPROMPT" not in output_text.out + output_text.err

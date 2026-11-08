@@ -41,9 +41,14 @@ class Transcriber:
     def transcribe(
         self, path: Path, *, progress: Callable[[float, float | None], None] | None = None
     ) -> Transcription:
-        segments, info = self.model.transcribe(
-            str(path), language=self.config.language, vad_filter=True
-        )
+        options = {"language": self.config.language, "vad_filter": True}
+        if self.config.initial_prompt:
+            options["initial_prompt"] = self.config.initial_prompt
+        if self.config.beam_size is not None:
+            options["beam_size"] = self.config.beam_size
+        if self.config.temperature is not None:
+            options["temperature"] = self.config.temperature
+        segments, info = self.model.transcribe(str(path), **options)
         # Faster-Whisper executes lazily: consume inside the caller's error boundary.
         # Segment timestamps are the only available progress signal without probing media.
         duration = getattr(info, "duration", None)

@@ -1,15 +1,18 @@
 """Command-line orchestration and per-file failure reporting."""
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from video_transcriber.config import COMPUTE_TYPES, MODELS, TranscriptionConfig
+from video_transcriber.evaluation import evaluate_files
 from video_transcriber.exporters import FORMATS, Exporter, exporters_for
 from video_transcriber.exporters import TxtExporter as TxtExporter
 from video_transcriber.progress import ProgressReporter
 from video_transcriber.sources.youtube import YouTubeError, YouTubeSource, select_audio
 from video_transcriber.transcriber import Transcriber
+from video_transcriber.vocabulary import PROFILES, build_prompt
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--compute-type", choices=COMPUTE_TYPES, default="int8")
     command.add_argument("--model-dir", type=Path, help="Persistent model cache directory")
     command.add_argument("--local-files-only", action="store_true", help="Never download models")
+    command.add_argument("--initial-prompt", help="Short contextual hint for Whisper")
+    command.add_argument("--vocabulary-file", type=Path, help="UTF-8 list of domain terms")
+    command.add_argument("--vocabulary-profile", choices=tuple(PROFILES))
+    command.add_argument("--beam-size", type=int, help="Opt-in decoder beam size (1-10)")
+    command.add_argument("--temperature", type=float, help="Opt-in decoder temperature (0-1)")
     command.add_argument("--no-timestamps", action="store_true")
     command.add_argument("--format", choices=FORMATS, default="txt", help="Default: txt")
     command.add_argument("--overwrite", action="store_true")
@@ -42,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument(
         "--progress", action="store_true", help="Show stage, download and transcription progress"
     )
+    evaluate_command = commands.add_parser(
+        "evaluate", help="Offline WER/CER comparison against a human reference"
+    )
+    evaluate_command.add_argument("--reference", type=Path, required=True)
+    evaluate_command.add_argument("--hypothesis", type=Path, required=True)
     return parser
 
 
@@ -71,6 +84,11 @@ def _config(args: argparse.Namespace) -> TranscriptionConfig:
         language=args.language,
         model_dir=args.model_dir,
         local_files_only=args.local_files_only,
+        initial_prompt=build_prompt(
+            args.initial_prompt, args.vocabulary_profile, args.vocabulary_file
+        ),
+        beam_size=args.beam_size,
+        temperature=args.temperature,
     )
 
 
@@ -88,6 +106,11 @@ def _pending_exports(
 def transcribe_youtube(args: argparse.Namespace) -> int:
     reporter = ProgressReporter(args.progress)
     exporters = exporters_for(args.format, timestamps=not args.no_timestamps)
+    try:
+        config = _config(args)
+    except ValueError as exc:
+        print(f"Error [INVALID_CONTEXT]: {exc}", file=sys.stderr)
+        return 2
 
     def debug(message: str) -> None:
         if args.debug:
@@ -156,7 +179,7 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
 
         try:
             reporter.start("model")
-            engine = Transcriber(_config(args))
+            engine = Transcriber(config)
             reporter.finish("model")
             reporter.start("transcription")
             if args.progress:
@@ -228,6 +251,14 @@ def transcribe_youtube(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "evaluate":
+        try:
+            report = evaluate_files(args.reference, args.hypothesis)
+        except ValueError as exc:
+            print(f"Error [INVALID_EVALUATION]: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(report, ensure_ascii=False))
+        return 0
     if args.url:
         return transcribe_youtube(args)
     if (
@@ -251,6 +282,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
+    try:
+        config = _config(args)
+    except ValueError as exc:
+        print(f"Error [INVALID_CONTEXT]: {exc}", file=sys.stderr)
+        return 2
     exporters = exporters_for(args.format, timestamps=not args.no_timestamps)
     reporter = ProgressReporter(args.progress)
     pending: list[tuple[Path, list[tuple[Exporter, Path]]]] = []
@@ -267,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
     if pending:
         try:
             reporter.start("model")
-            engine = Transcriber(_config(args))
+            engine = Transcriber(config)
             reporter.finish("model")
         except Exception as exc:
             print(f"Error loading model: {exc}", file=sys.stderr)

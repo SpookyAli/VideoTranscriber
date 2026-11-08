@@ -228,3 +228,72 @@ def test_local_formats_are_race_safe(tmp_path, engine, monkeypatch):
     assert main(args) == 0
     assert target.read_text() == "other writer"
     assert (out / "demo.srt").exists()
+
+
+def test_contextual_cli_builds_config_with_profile_and_file(tmp_path, engine):
+    media = tmp_path / "sample.webm"
+    media.touch()
+    glossary = tmp_path / "terms.txt"
+    glossary.write_text("Travis Kelce\n", encoding="utf-8")
+    args = [
+        "transcribe",
+        "--input",
+        str(media),
+        "--output",
+        str(tmp_path / "out"),
+        "--vocabulary-profile",
+        "nfl",
+        "--vocabulary-file",
+        str(glossary),
+        "--initial-prompt",
+        "NFL en español.",
+        "--beam-size",
+        "4",
+        "--temperature",
+        "0.0",
+    ]
+    assert main(args) == 0
+    config = engine[0].call_args.args[0]
+    assert "Patrick Mahomes" in config.initial_prompt
+    assert "Travis Kelce" in config.initial_prompt
+    assert config.beam_size == 4
+    assert config.temperature == 0.0
+
+
+def test_invalid_vocabulary_is_preflight_and_keeps_outputs(tmp_path, engine, capsys):
+    media = tmp_path / "sample.webm"
+    media.touch()
+    args = [
+        "transcribe",
+        "--input",
+        str(media),
+        "--output",
+        str(tmp_path / "out"),
+        "--vocabulary-file",
+        str(tmp_path / "notfound.txt"),
+    ]
+    assert main(args) == 2
+    assert "INVALID_CONTEXT" in capsys.readouterr().err
+    engine[0].assert_not_called()
+
+
+def test_evaluate_cli_json_report_without_media_loading(tmp_path, engine, capsys):
+    reference = tmp_path / "reference.txt"
+    hypothesis = tmp_path / "hypothesis.txt"
+    reference.write_text("hola mundo", encoding="utf-8")
+    hypothesis.write_text("hola mudo", encoding="utf-8")
+    assert main(["evaluate", "--reference", str(reference), "--hypothesis", str(hypothesis)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["wer"] == 0.5
+    assert report["cer"] == 0.1
+    engine[0].assert_not_called()
+
+
+def test_evaluate_cli_rejects_empty_reference(tmp_path, engine, capsys):
+    reference = tmp_path / "reference.txt"
+    hypothesis = tmp_path / "hypothesis.txt"
+    reference.write_text("!!!", encoding="utf-8")
+    hypothesis.write_text("text", encoding="utf-8")
+    assert main(["evaluate", "--reference", str(reference), "--hypothesis", str(hypothesis)]) == 2
+    assert "INVALID_EVALUATION" in capsys.readouterr().err
+    engine[0].assert_not_called()

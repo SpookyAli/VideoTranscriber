@@ -344,3 +344,63 @@ file is atomic, but publication across all three files is **not** a
 transaction: if one export fails, previously published formats remain.
 YouTube audio is retained when any output fails. No new dependencies
 or download mechanisms are introduced.
+
+## Contextual Vocabulary & Accuracy Evaluation (V1.4)
+
+Optional vocabulary hints guide Faster-Whisper's recognition of proper names and
+domain terminology. They are **hints**, not guaranteed spelling corrections,
+forced word alignment, substitutions or post-processing. Existing transcriptions
+behave as before unless new options are explicitly supplied.
+
+```powershell
+python main.py transcribe --input "input/PLAYBOOK Semana 8.webm" --language es --model medium --model-dir models --format all --vocabulary-profile nfl --progress --overwrite
+python main.py transcribe --input "input/PLAYBOOK Semana 8.webm" --language es --model medium --model-dir models --format all --initial-prompt "Análisis de NFL en español." --vocabulary-file "vocabulary/nfl.txt" --beam-size 4 --temperature 0 --overwrite
+```
+
+Available built-in profiles are `nfl`, `gaming`, and `technology`. A custom
+`--vocabulary-file` contains one term per line in UTF-8; blank lines and lines
+beginning with `#` are ignored. Profile vocabulary, custom terms, and an optional
+`--initial-prompt` are composed into Faster-Whisper's `initial_prompt`.
+Duplicate terms are deduplicated case-insensitively. Vocabulary is bounded to
+64 terms (100 characters each), UTF-8 files to 16 KiB, and the total prompt to
+1200 characters. The CLI validates terms before starting inference, and never
+prints prompt content in `--debug` or `--progress`. Avoid including credentials
+or other sensitive information in your local glossary.
+
+`--beam-size` (1–10) and `--temperature` (0–1) are opt-in decoding controls.
+Their values are passed directly to Faster-Whisper only when specified, preserving
+the prior decoder defaults otherwise. They can affect speed and accuracy; increasing
+a parameter is not automatically better.
+
+### Offline evaluation against a human transcript
+
+Obtain or carefully annotate a **human-verified reference transcript** for the
+same audio. A model-generated file is not an independent ground truth.
+Compare it to a hypothesis using:
+
+```powershell
+python main.py evaluate --reference "references/clip.txt" --hypothesis "output/clip.json"
+python main.py evaluate --reference "references/clip.txt" --hypothesis "output/clip.txt"
+```
+
+The command reports JSON with `wer` (word error rate), `cer` (character error
+rate), reference counts, and exact Levenshtein error counts. Both inputs accept
+plain UTF-8 TXT or V1.3 transcription JSON; the standard bracketed timestamps
+in our TXT exports are stripped automatically. Normalization is consistent:
+Unicode NFC, case-folding, punctuation ignored, and whitespace collapsed.
+Character comparisons **include normalized spaces**. Rates can exceed 1.0 when
+there are many insertions. A reference containing no words is rejected.
+The evaluator prints only metrics, not transcript contents; it runs locally
+without loading a Whisper model or contacting a remote service.
+
+Compare baseline and contextual predictions against **the same independently
+verified reference**. Use a short test clip before re-running a 40-minute recording.
+When testing the same media in two configurations, choose different output folders
+(e.g. `--output output/baseline` and `--output output/nfl_context`) and use
+`--overwrite` when needed; otherwise existing outputs are skipped. A vocabulary
+hint may reduce, increase, or leave errors unchanged, so use WER/CER results to
+decide whether it is worthwhile. The optimized RapidFuzz distance engine is
+included as a normal application dependency for efficient full-length evaluation.
+
+No cloud transcription provider, automatic vocabulary retrieval, rewriting of
+generated transcript text, or changes to yt-dlp download mechanics are introduced.
