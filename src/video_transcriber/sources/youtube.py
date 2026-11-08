@@ -2,6 +2,7 @@
 
 import re
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -109,6 +110,50 @@ def select_audio(
         )
 
     return max(audio, key=rank)
+
+
+def select_hls_audio(
+    formats: list[dict], language: str | None = None, prefer_original: bool = False
+) -> dict | None:
+    """Choose a small, DRM-free HLS A/V format in the requested audio language.
+
+    This does not infer language from the video title or its default track.
+    It only accepts formats with explicitly labeled language metadata.
+    """
+    wanted = _language(language)
+    candidates = [
+        fmt
+        for fmt in formats
+        if str(fmt.get("protocol", "")).startswith("m3u8")
+        and fmt.get("vcodec") not in {None, "none"}
+        and str(fmt.get("acodec", "")).startswith("mp4a")
+        and fmt.get("ext") == "mp4"
+        and not fmt.get("has_drm")
+        and _language(fmt.get("language"))
+    ]
+    if wanted:
+        candidates = [
+            fmt
+            for fmt in candidates
+            if _language(fmt.get("language")).split("-")[0] == wanted.split("-")[0]
+        ]
+    else:
+        # For an unspecified language, prefer the explicitly original track.
+        # Do not guess among unidentified or dubbed tracks.
+        candidates = [fmt for fmt in candidates if _original(fmt)]
+    if not candidates:
+        return None
+    # Prefer original audio and avoid DRC; download the smallest video rendition.
+    return min(
+        candidates,
+        key=lambda fmt: (
+            not _original(fmt),
+            "drc" in str(fmt.get("format_note", "")).lower(),
+            _language(fmt.get("language")) != wanted if wanted else False,
+            fmt.get("height") or 99999,
+            fmt.get("tbr") or 99999,
+        ),
+    )
 
 
 class _QuietLogger:
@@ -230,6 +275,7 @@ class YouTubeSource:
         self.info: dict = {}
         self.stem = ""
         self.directory: Path | None = None
+        self.used_hls_fallback = False
 
     def inspect(self) -> None:
         from yt_dlp import YoutubeDL
@@ -263,11 +309,90 @@ class YouTubeSource:
         except Exception as exc:
             raise _failure(exc, self.deno, "METADATA_EXTRACTION") from None
 
+    def _download_format(
+        self, selected: dict | None, progress_hook: Callable[[dict], None] | None
+    ) -> Path:
+        """Use inspected metadata with a single selected format, never a merge."""
+        from yt_dlp import YoutubeDL
+
+        options = dict(self.options)
+        if progress_hook is not None:
+            options["progress_hooks"] = [progress_hook]
+        options["format"] = (lambda ctx: iter([selected])) if selected else "bestaudio"
+        options["outtmpl"] = str(self.directory / self.stem).replace("%", "%%") + ".%(ext)s"
+        info = dict(self.info)
+        for key in ("requested_formats", "requested_downloads", "filepath", "_filename"):
+            info.pop(key, None)
+        with YoutubeDL(options) as ydl:
+            result = ydl.process_ie_result(info, download=True)
+            downloads = result.get("requested_downloads") or [result]
+            path = Path(downloads[0].get("filepath") or ydl.prepare_filename(result)).resolve()
+        if path.parent != self.directory or not path.is_file() or path.is_symlink():
+            raise YouTubeError(
+                "Downloader did not return a valid owned audio file",
+                code="DOWNLOADED_FILE_INVALID",
+                stage="DOWNLOADED_FILE_VALIDATION",
+            )
+        return path
+
+    def _extract_hls_audio(self, path: Path) -> Path:
+        """Remux the AAC audio from the downloaded HLS stream without re-encoding."""
+        if shutil.which("ffmpeg") is None:
+            raise YouTubeError(
+                "FFmpeg is required to extract audio from an HLS fallback download",
+                code="FFMPEG_UNAVAILABLE",
+                stage="AUDIO_EXTRACTION",
+            )
+        target = path.with_suffix(".m4a")
+        if target.exists():
+            raise YouTubeError(
+                "HLS audio output already exists",
+                code="AUDIO_EXTRACTION_FAILED",
+                stage="AUDIO_EXTRACTION",
+            )
+        try:
+            completed = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(path),
+                    "-map",
+                    "0:a:0",
+                    "-vn",
+                    "-c:a",
+                    "copy",
+                    "-bsf:a",
+                    "aac_adtstoasc",
+                    "-f",
+                    "ipod",
+                    str(target),
+                ],
+                capture_output=True,
+                check=False,
+                timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise YouTubeError(
+                "FFmpeg could not extract the HLS audio; downloaded media retained",
+                code="AUDIO_EXTRACTION_FAILED",
+                stage="AUDIO_EXTRACTION",
+            ) from None
+        if completed.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
+            raise YouTubeError(
+                "FFmpeg failed to extract the HLS audio; downloaded media retained",
+                code="AUDIO_EXTRACTION_FAILED",
+                stage="AUDIO_EXTRACTION",
+            )
+        path.unlink()
+        return target
+
     def download(
         self, directory: Path, *, progress_hook: Callable[[dict], None] | None = None
     ) -> Path:
-        from yt_dlp import YoutubeDL
-
         if not self.info:
             raise YouTubeError(
                 "Inspect video metadata before downloading",
@@ -277,31 +402,40 @@ class YouTubeSource:
         try:
             directory.mkdir(parents=True, exist_ok=True)
             self.directory = Path(tempfile.mkdtemp(prefix="youtube-", dir=directory)).resolve()
+            self.used_hls_fallback = False
             selected = select_audio(
                 self.info.get("formats", []), self.audio_language, self.prefer_original
             )
-            options = dict(self.options)
-            if progress_hook is not None:
-                options["progress_hooks"] = [progress_hook]
-            options["format"] = (lambda ctx: iter([selected])) if selected else "bestaudio"
-            # Escape metadata percent signs in yt-dlp's output template.
-            options["outtmpl"] = str(self.directory / self.stem).replace("%", "%%") + ".%(ext)s"
-            # extract_info(download=False) still adds a selection. Do not carry a
-            # prior video/audio merge into the audio-only download's process_info.
-            info = dict(self.info)
-            for key in ("requested_formats", "requested_downloads", "filepath", "_filename"):
-                info.pop(key, None)
-            with YoutubeDL(options) as ydl:
-                result = ydl.process_ie_result(info, download=True)
-                downloads = result.get("requested_downloads") or [result]
-                path = Path(downloads[0].get("filepath") or ydl.prepare_filename(result)).resolve()
-            if path.parent != self.directory or not path.is_file() or path.is_symlink():
+            try:
+                return self._download_format(selected, progress_hook)
+            except YouTubeError:
+                raise
+            except Exception as exc:
+                initial_failure = _failure(exc, self.deno, "DOWNLOAD")
+                if initial_failure.code != "DOWNLOAD_HTTP_403":
+                    raise initial_failure from None
+
+            hls = select_hls_audio(
+                self.info.get("formats", []), self.audio_language, self.prefer_original
+            )
+            if hls is None:
+                raise initial_failure
+            if shutil.which("ffmpeg") is None:
                 raise YouTubeError(
-                    "Downloader did not return a valid owned audio file",
-                    code="DOWNLOADED_FILE_INVALID",
-                    stage="DOWNLOADED_FILE_VALIDATION",
+                    "Audio-only download was rejected (HTTP 403); HLS requires FFmpeg",
+                    code="FFMPEG_UNAVAILABLE",
+                    stage="AUDIO_EXTRACTION",
+                    http_status=403,
                 )
-            return path
+            try:
+                media = self._download_format(hls, progress_hook)
+            except YouTubeError:
+                raise
+            except Exception as exc:
+                raise _failure(exc, self.deno, "DOWNLOAD") from None
+            audio = self._extract_hls_audio(media)
+            self.used_hls_fallback = True
+            return audio
         except YouTubeError:
             raise
         except Exception as exc:
